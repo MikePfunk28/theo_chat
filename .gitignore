@@ -1,0 +1,8 @@
+node_modules/
+config.json
+.tokens.json
+oauth.json
+*.env
+.env.*
+.venv/*
+.claude/*

@@ -1,0 +1,86 @@
+/* TheoChat — YouTube messages injected into Twitch chat */
+
+.theochat-msg {
+  padding: 5px 20px;
+  line-height: 20px;
+  word-wrap: break-word;
+  font-size: 13px;
+  color: #efeff1;
+  font-family: inherit;
+}
+
+.theochat-msg.theochat-deleted {
+  opacity: 0.3;
+  text-decoration: line-through;
+}
+
+.theochat-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ff0000;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+  line-height: 14px;
+}
+
+.theochat-badge-moderator {
+  background: #5e84f1;
+}
+
+.theochat-badge-member {
+  background: #2ba640;
+}
+
+.theochat-badge-owner {
+  background: #ffd600;
+  color: #000;
+}
+
+.theochat-badge-superchat {
+  background: #f57c00;
+}
+
+.theochat-author {
+  font-weight: 700;
+  cursor: pointer;
+  margin-right: 4px;
+}
+
+.theochat-author:hover {
+  text-decoration: underline;
+}
+
+.theochat-text {
+  word-break: break-word;
+}
+
+.theochat-superchat-amount {
+  background: #f57c00;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+}
+
+.theochat-system {
+  padding: 5px 20px;
+  font-size: 12px;
+  color: #adadb8;
+  font-style: italic;
+}
+
+.theochat-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 4px;
+}
