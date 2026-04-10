@@ -1,0 +1,22 @@
+name = "t3yt"
+
+compatibility_date = "2026-04-10"
+compatibility_flags = ["nodejs_compat"]
+
+main = "worker/src/index.js"
+
+routes = [
+  { pattern = "t3yt.mikepfunk.com/*", zone_name = "mikepfunk.com" }
+]
+
+[env.preview]
+name = "t3yt-preview"
+
+[observability]
+enabled = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true

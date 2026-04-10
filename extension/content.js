@@ -5,8 +5,10 @@
   'use strict';
 
   // ─── Configuration ────────────────────────────────────────────
-  const WS_URL = 'ws://localhost:9300';
+  // Default WS URL — overridden by extension options (stored in chrome.storage)
+  const DEFAULT_WS_URL = 'ws://localhost:9300';
   const RECONNECT_DELAY = 3000;
+  let WS_URL = DEFAULT_WS_URL;
 
   // Twitch chat selectors — if Twitch changes their DOM, update these
   const SELECTORS = {
@@ -312,6 +314,16 @@
   // ─── Initialize ──────────────────────────────────────────────
 
   console.log('[TheoChat] Extension loaded');
-  waitForChatContainer();
+
+  // Load WebSocket URL from extension storage, then start
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+    chrome.storage.sync.get({ wsUrl: DEFAULT_WS_URL }, (result) => {
+      WS_URL = result.wsUrl || DEFAULT_WS_URL;
+      console.log(`[TheoChat] WebSocket URL: ${WS_URL}`);
+      waitForChatContainer();
+    });
+  } else {
+    waitForChatContainer();
+  }
 
 })();

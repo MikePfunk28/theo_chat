@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0e0e10;
+      color: #efeff1;
+      padding: 1.5rem;
+      min-width: 360px;
+    }
+    h2 {
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, #ff0000, #9146ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    label {
+      display: block;
+      color: #adadb8;
+      font-size: 0.85rem;
+      margin-bottom: 0.4rem;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #303032;
+      border-radius: 6px;
+      background: #18181b;
+      color: #efeff1;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #9146ff;
+    }
+    button {
+      background: #9146ff;
+      color: white;
+      border: none;
+      padding: 0.5rem 1.2rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { background: #772ce8; }
+    .status {
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+      color: #00ad03;
+      display: none;
+    }
+    .hint {
+      color: #606064;
+      font-size: 0.75rem;
+      margin-top: -0.6rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h2>TheoChat Settings</h2>
+
+  <label for="wsUrl">WebSocket URL</label>
+  <input type="text" id="wsUrl" placeholder="wss://your-railway-app.up.railway.app">
+  <p class="hint">The URL of your TheoChat service. Use ws:// for local, wss:// for Railway.</p>
+
+  <button id="save">Save</button>
+  <div class="status" id="status">Settings saved!</div>
+
+  <script src="options.js"></script>
+</body>
+</html>

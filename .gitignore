@@ -4,5 +4,6 @@ config.json
 oauth.json
 *.env
 .env.*
-.venv/*
-.claude/*
+.venv/
+.claude/
+api.json
