@@ -8,3 +8,7 @@ oauth.json
 .claude/
 api.json
 railway.json
+.wrangler/
+wrangler-account.json
+dist/
+*.log

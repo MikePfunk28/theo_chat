@@ -1,120 +1,190 @@
 # TheoChat
 
-Combines YouTube live chat into your Twitch chat. YouTube messages appear directly in your Twitch chat panel with a red **YT** badge. When your YouTube mods delete messages or ban users, those actions are reflected in real time.
+Merges YouTube live chat into your Twitch chat view. YouTube messages appear inline in the native Twitch chat panel with a red `YT` badge. When YouTube mods delete a message or ban a user, those actions sync to the Twitch view instantly. Built for [theo.gg](https://theo.gg) — but works for any streamer who simulcasts to YouTube + Twitch.
+
+**Live site:** [t3yt.mikepfunk.com](https://t3yt.mikepfunk.com)
+
+---
 
 ## How It Works
 
-Two pieces:
-
-1. **Service** — A Node.js app that connects to YouTube's gRPC streaming API and receives chat messages, deletions, and bans in real time.
-2. **Extension** — A browser extension (Chrome/Zen/Chromium) that connects to the service and injects YouTube messages into Twitch's chat panel.
-
-## Setup (One Time)
-
-### 1. Google Cloud Project
-
-You need a Google Cloud project with the YouTube Data API enabled. Takes about 5 minutes:
-
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project (name it anything, e.g. "TheoChat")
-3. In the sidebar, go to **APIs & Services → Library**
-4. Search for "YouTube Data API v3" and click **Enable**
-
-Then choose an auth method:
-
-**Option A: OAuth (recommended)** — Best UX, Theo just clicks "Sign in with Google"
-
-5. Go to **APIs & Services → OAuth consent screen**
-6. User type: External. Fill in app name (e.g. "TheoChat"), add your email as a test user
-7. Go to **Credentials → Create Credentials → OAuth client ID**
-8. Application type: **Desktop app**
-9. Copy the **Client ID** and **Client Secret**
-
-**Option B: API Key** — Simpler, no sign-in needed, read-only public chat access
-
-5. Go to **Credentials → Create Credentials → API Key**
-6. Copy the key (optionally restrict it to YouTube Data API v3)
-
-### 2. Install the Service
-
-```bash
-cd service
-npm install
-npm run setup
+```
+YouTube goes live
+       │
+       ▼
+YouTube PubSub push ───► [Railway service] ──(videos.list, 1 quota)──► gRPC stream
+                               │
+                               ▼ (WebSocket)
+                        [Browser extension]
+                               │
+                               ▼ (DOM injection)
+                         Twitch chat panel ─── YT messages + mod sync
 ```
 
-The setup wizard will ask which auth method you want and walk you through entering your credentials. It also asks for a YouTube Channel ID (starts with UC) so it can auto-find live streams.
+**Push-based, zero idle quota.** The Railway service subscribes once to YouTube's PubSubHubbub. YouTube pushes a notification the instant you go live. The service verifies with one `videos.list` call (1 quota unit), connects the gRPC stream, and broadcasts messages over WebSocket to the browser extension. No polling, ever.
 
-### 3. Start the Service
+**Read-only mirror.** YouTube is the source of truth. We never write to YouTube, never touch Twitch's actual chat. We just paint YouTube messages into Theo's Twitch browser tab.
 
-```bash
-npm start
-```
+**OBS-compatible.** OBS captures whatever Theo's browser shows, so viewers see the merged chat too. For streamers using OBS's built-in browser source for chat, a standalone transparent overlay is available at `/overlay`.
 
-If using OAuth, your browser will open a Google sign-in page on first run. Sign in and click Allow. This only happens once — the token is saved locally.
+---
 
-### 4. Install the Extension
+## Architecture
 
-1. Open Zen/Chrome and go to `zen://extensions` (or `chrome://extensions`)
-2. Enable **Developer mode** (toggle in the top right)
-3. Click **Load unpacked**
-4. Select the `extension` folder from this project
-5. Open Twitch — YouTube chat messages will appear with a red [YT] badge
+Three deployable surfaces:
 
-## Usage
+| Surface | Stack | Hosted on | Purpose |
+|---|---|---|---|
+| **Service** | Node.js + gRPC + ws | Railway | Connects to YouTube, relays chat via WebSocket, serves `/overlay` |
+| **Landing + API** | Cloudflare Worker | Cloudflare | `t3yt.mikepfunk.com` landing, `/api/config`, `/privacy` |
+| **Extension** | WebExtension MV3 | Firefox/Zen/Chrome | Injects YouTube messages into Twitch DOM, popup control rig |
 
-Every time you stream:
+### Design language
 
-1. Start the service: `cd service && npm start`
-2. Open Twitch in Zen/Chrome with the extension installed
-3. YouTube chat appears in your Twitch chat panel automatically
+Every surface shares the same Impeccable-aligned visual system:
 
-The service finds your active live stream automatically. When the stream ends, it waits and reconnects when you go live again.
+- **Palette:** OKLCH, purple-tinted neutrals (hue 270), YouTube red `oklch(0.64 0.24 28)`, Twitch purple `oklch(0.68 0.21 295)`, live-green, caution-amber
+- **Typography:** Syne (display, Extrabold wordmarks) + Instrument Sans (body)
+- **Layout:** flat hierarchy, 1px industrial dividers, no cards-in-cards
+- **Motion:** `cubic-bezier(.22, 1, .36, 1)` — exponential decel, pulse only on live signals
+- **Never:** glassmorphism, gradient text, rounded-drop-shadow card grids
 
-## What You'll See
+### Key features
 
-- YouTube messages in Twitch chat with a red **YT** badge
-- YouTube mod/owner/member badges on messages
-- Super Chat amounts displayed
-- When a YouTube mod deletes a message → it gets struck through and removed
-- When a YouTube mod bans a user → all their messages are removed
+- **Zero-delay by default** — messages appear instant
+- **Opt-in mod buffer** — slider in popup lets Theo hold messages 0–30s so mods can delete on YouTube before viewers ever see them; deleted-while-buffered messages never render
+- **Instant mod sync** — deletions and bans from YouTube mods reflect in the Twitch view immediately
+- **Super chats, member badges, owner badges** pass through with proper styling
+- **Auto-reconnect** on both the gRPC and WebSocket layers
+- **PubSub auto-renewal** every 4 days (subscription lease is 5 days)
+- **Zero-config extension** — fetches WS URL from `t3yt.mikepfunk.com/api/config` at startup; Theo never types a URL
 
-## Config Reference
-
-`config.json` supports these fields:
-
-```json
-{
-  "clientId": "...",        // OAuth client ID (Option A)
-  "clientSecret": "...",    // OAuth client secret (Option A)
-  "apiKey": "...",          // API key (Option B) — takes priority if both are set
-  "channelId": "UC...",     // YouTube channel ID for auto-detecting live streams
-  "videoId": "...",         // Specific video ID (optional, overrides channelId)
-  "wsPort": 9300,           // WebSocket port for extension connection
-  "httpPort": 9301          // HTTP status server port
-}
-```
-
-Auth priority: if `apiKey` is set, it's used. Otherwise falls back to OAuth with `clientId`/`clientSecret`.
+---
 
 ## Project Structure
 
 ```
 theo_chat/
-├── service/                  # Node.js backend
-│   ├── index.js              # Entry point + WebSocket server
-│   ├── youtube.js            # YouTube gRPC stream + event normalization
-│   ├── auth.js               # OAuth + API key auth (dual mode)
-│   ├── setup.js              # First-time configuration wizard
-│   ├── grpc/                 # YouTube protobuf stubs
+├── service/                   # Node.js backend (Railway)
+│   ├── index.js               # HTTP+WS server, PubSub webhook, gRPC stream handler
+│   ├── overlay.html           # OBS browser-source overlay (served at /overlay)
+│   ├── grpc/                  # Pre-generated YouTube protobuf stubs
 │   │   ├── stream_list_pb.js
 │   │   └── stream_list_grpc_pb.js
 │   └── package.json
-├── extension/                # Browser extension (Manifest V3)
-│   ├── manifest.json
-│   ├── content.js            # Twitch DOM injection + WebSocket client
-│   ├── theochat.css          # Styling for injected messages
-│   ├── icon48.png
-│   └── icon128.png
-└── README.md
+│
+├── extension/                 # Browser extension (WebExtension MV3)
+│   ├── manifest.json          # Firefox/Zen + Chrome compatible
+│   ├── content.js             # Twitch DOM injection, delay queue, WS client
+│   ├── theochat.css           # Injected message styling
+│   ├── popup.html             # Control rig — toggle, delay slider, telemetry
+│   ├── popup.css
+│   ├── popup.js
+│   ├── options.html           # Advanced overrides
+│   ├── options.css
+│   └── options.js
+│
+├── worker/
+│   └── src/index.js           # Cloudflare Worker — landing, /api/config, /privacy
+│
+├── Dockerfile                 # Railway container build
+├── railway.toml               # Railway build/deploy config
+├── wrangler.toml              # Cloudflare Worker config (custom_domain = true)
+└── package.json               # Root (Cloudflare Pages build shim)
 ```
+
+---
+
+## Configuration
+
+### Railway environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GOOGLE_API_KEY` | ✓ | YouTube Data API key (supports `YOUTUBE_API_KEY` as alias) |
+| `YOUTUBE_CHANNEL_ID` | ✓ | Target channel ID (starts with `UC...`) |
+| `PUBLIC_URL` | ✓ | Service's public URL (e.g. `https://theochat-production.up.railway.app`) — required for PubSub webhook registration |
+| `WS_TOKEN` | optional | Shared secret for WebSocket auth |
+| `YOUTUBE_VIDEO_ID` | optional | Override for testing — points service at a specific video instead of discovering from channel |
+| `PORT` | auto | Set by Railway |
+
+### Cloudflare Worker
+
+The Railway WebSocket URL is hardcoded as `WS_URL` at the top of `worker/src/index.js`. Update + redeploy if the service moves.
+
+### Extension
+
+Auto-configures by fetching from `https://t3yt.mikepfunk.com/api/config`. Users never touch settings unless they want to override via the **Advanced** page (popup footer).
+
+---
+
+## Deployment
+
+Both services auto-deploy on `git push origin main`:
+
+- **Cloudflare Workers Builds** watches the repo → runs `pnpm build` (no-op, see root `package.json`) → deploys the Worker via `wrangler deploy` → provisions the custom domain + DNS automatically (because `wrangler.toml` uses `custom_domain = true`)
+- **Railway** watches the repo → builds the Dockerfile → runs the Node service → applies environment variables from the dashboard
+
+No manual deploys needed unless you're iterating without committing.
+
+---
+
+## Testing Without a Real Stream
+
+Three ways to exercise the pipeline without Theo being live:
+
+### Point at any public live stream
+```
+Railway → Variables → YOUTUBE_VIDEO_ID = <some-live-video-id>
+```
+Service connects to that stream's chat. Remove the var to fall back to `YOUTUBE_CHANNEL_ID`.
+
+### Simulate a PubSub notification
+```bash
+curl -X POST https://theochat-production.up.railway.app/webhook/youtube \
+  -H "Content-Type: application/atom+xml" \
+  -d '<?xml version="1.0" encoding="UTF-8"?>
+      <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+            xmlns="http://www.w3.org/2005/Atom">
+        <entry><yt:videoId>LIVE_VIDEO_ID</yt:videoId></entry>
+      </feed>'
+```
+
+### Your own unlisted YouTube live stream
+`studio.youtube.com → Create → Go Live → Unlisted`. Change `YOUTUBE_CHANNEL_ID` on Railway to your test channel. Full control over every event type.
+
+---
+
+## Installing the Extension
+
+### For Zen / Firefox (sideload, development)
+1. Clone this repo
+2. `about:debugging` → **This Firefox** → **Load Temporary Add-on…**
+3. Pick `extension/manifest.json`
+4. Click the TheoChat icon in the toolbar → control rig opens
+
+### For Zen / Firefox (signed, persistent)
+Submit `extension/` to [addons.mozilla.org](https://addons.mozilla.org/developers/) for unlisted signing. AMO returns a signed `.xpi` you can host at `t3yt.mikepfunk.com/download` for one-click install.
+
+### For Chrome / Chromium
+Same `extension/` folder works. `chrome://extensions` → Developer Mode → Load unpacked.
+
+---
+
+## Quota Math
+
+YouTube Data API has a default 10,000 units/day. TheoChat's design:
+
+| State | Cost |
+|---|---|
+| Idle (nothing happening) | **0 units** — PubSub is free |
+| Stream starts (webhook fires) | **1 unit** (one `videos.list` call) |
+| Entire session (hours of chat) | **0 additional** — gRPC stream is included in that 1-unit setup |
+
+Expected daily usage: **< 20 units** even with multiple streams/day. A far cry from the original polling design's 288,000 units/day.
+
+---
+
+## License
+
+MIT.
