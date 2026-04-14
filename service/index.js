@@ -6,11 +6,11 @@ const { V3DataLiveChatMessageServiceClient } = require('./grpc/stream_list_grpc_
 const { LiveChatMessageListRequest } = require('./grpc/stream_list_pb.js');
 
 // ─── Config from environment variables ─────────────────────────
-const API_KEY = process.env.YOUTUBE_API_KEY;
+const API_KEY = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
 const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
-const WS_PORT = parseInt(process.env.PORT || '9300', 10);
-const HTTP_PORT = parseInt(process.env.HTTP_PORT || '9301', 10);
+const PORT = parseInt(process.env.PORT || '9300', 10);
+const WS_TOKEN = process.env.WS_TOKEN || '';
 
 if (!API_KEY) {
   console.error('\n  YOUTUBE_API_KEY environment variable is required.\n');
@@ -42,11 +42,51 @@ let running = true;
 // ─── YouTube REST API client (for stream discovery) ────────────
 const youtube = google.youtube({ version: 'v3', auth: API_KEY });
 
-// ─── WebSocket Server ──────────────────────────────────────────
-const wss = new WebSocket.Server({ port: WS_PORT });
+// ─── Single HTTP server (health check + overlay + WebSocket upgrade) ─
+const fs = require('fs');
+const overlayPath = require('path').join(__dirname, 'overlay.html');
+
+const server = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const parsedUrl = req.url.split('?')[0];
+
+  if (parsedUrl === '/health' || parsedUrl === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      clients: clientCount,
+      liveChatId,
+      videoId
+    }));
+  } else if (parsedUrl === '/overlay') {
+    try {
+      const html = fs.readFileSync(overlayPath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch (err) {
+      res.writeHead(500);
+      res.end('Overlay not found');
+    }
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+
+const wss = new WebSocket.Server({ server });
 let clientCount = 0;
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  // Token auth: reject unauthorized connections
+  if (WS_TOKEN) {
+    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+    const token = reqUrl.searchParams.get('token');
+    if (token !== WS_TOKEN) {
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+  }
+
   clientCount++;
   console.log(`  [WS] Client connected (${clientCount} total)`);
   ws.send(JSON.stringify({ type: 'system.connected', text: 'TheoChat connected' }));
@@ -65,25 +105,8 @@ function broadcast(event) {
   }
 }
 
-// ─── HTTP health check (Railway needs this) ────────────────────
-const httpServer = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  if (req.url === '/health' || req.url === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok',
-      clients: clientCount,
-      liveChatId,
-      videoId
-    }));
-  } else {
-    res.writeHead(404);
-    res.end('Not found');
-  }
-});
-
-httpServer.listen(HTTP_PORT, () => {
-  console.log(`  [HTTP] Health check on http://localhost:${HTTP_PORT}/health`);
+server.listen(PORT, () => {
+  console.log(`  [HTTP] Health check + WebSocket on port ${PORT}`);
 });
 
 // ─── Discover live stream ──────────────────────────────────────
@@ -268,7 +291,7 @@ async function main() {
   console.log('\n  ╔══════════════════════════════════════╗');
   console.log('  ║       TheoChat Service v1.0.0         ║');
   console.log('  ╚══════════════════════════════════════╝\n');
-  console.log(`  [WS] WebSocket on ws://localhost:${WS_PORT}`);
+  console.log(`  [WS] Health check + WebSocket on port ${PORT}`);
 
   while (running) {
     try {
@@ -288,7 +311,7 @@ async function main() {
 }
 
 // ─── Shutdown ──────────────────────────────────────────────────
-process.on('SIGINT', () => { running = false; wss.close(); httpServer.close(); process.exit(0); });
-process.on('SIGTERM', () => { running = false; wss.close(); httpServer.close(); process.exit(0); });
+process.on('SIGINT', () => { running = false; wss.close(); server.close(); process.exit(0); });
+process.on('SIGTERM', () => { running = false; wss.close(); server.close(); process.exit(0); });
 
 main();

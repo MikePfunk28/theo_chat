@@ -7,3 +7,4 @@ oauth.json
 .venv/
 .claude/
 api.json
+railway.json

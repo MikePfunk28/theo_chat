@@ -67,7 +67,12 @@
   <input type="text" id="wsUrl" placeholder="wss://your-railway-app.up.railway.app">
   <p class="hint">The URL of your TheoChat service. Use ws:// for local, wss:// for Railway.</p>
 
+  <label for="wsToken">Connection Token</label>
+  <input type="text" id="wsToken" placeholder="(optional)">
+  <p class="hint">Token for authenticating with the service. Leave blank if none is set.</p>
+
   <button id="save">Save</button>
+  <button id="test" style="background: #303032; margin-left: 0.5rem;">Test Connection</button>
   <div class="status" id="status">Settings saved!</div>
 
   <script src="options.js"></script>

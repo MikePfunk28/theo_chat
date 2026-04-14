@@ -9,6 +9,7 @@
   const DEFAULT_WS_URL = 'ws://localhost:9300';
   const RECONNECT_DELAY = 3000;
   let WS_URL = DEFAULT_WS_URL;
+  let WS_TOKEN = '';
 
   // Twitch chat selectors — if Twitch changes their DOM, update these
   const SELECTORS = {
@@ -106,7 +107,8 @@
 
     console.log('[TheoChat] Connecting to service...');
 
-    ws = new WebSocket(WS_URL);
+    const connectUrl = WS_TOKEN ? `${WS_URL}?token=${encodeURIComponent(WS_TOKEN)}` : WS_URL;
+    ws = new WebSocket(connectUrl);
 
     ws.onopen = () => {
       isConnected = true;
@@ -236,34 +238,24 @@
   function deleteMessage(messageId) {
     const el = chatContainer.querySelector(`[data-theochat-msg-id="${CSS.escape(messageId)}"]`);
     if (el) {
-      el.classList.add('theochat-deleted');
-      // Remove after a short delay so the deletion is visible
-      setTimeout(() => el.remove(), 5000);
+      el.remove();
     }
   }
 
   function banUser(userId, bannedMessageIds) {
-    // Remove all messages from this user
+    // Remove all messages from this user immediately
     const userMsgs = chatContainer.querySelectorAll(`[data-theochat-user-id="${CSS.escape(userId)}"]`);
     for (const el of userMsgs) {
-      el.classList.add('theochat-deleted');
+      el.remove();
     }
 
     // Also remove by specific message IDs if provided
     for (const msgId of bannedMessageIds) {
       const el = chatContainer.querySelector(`[data-theochat-msg-id="${CSS.escape(msgId)}"]`);
       if (el) {
-        el.classList.add('theochat-deleted');
-      }
-    }
-
-    // Remove all after a delay
-    setTimeout(() => {
-      const deleted = chatContainer.querySelectorAll('.theochat-deleted');
-      for (const el of deleted) {
         el.remove();
       }
-    }, 3000);
+    }
   }
 
   function injectSystemMessage(text) {
@@ -317,8 +309,9 @@
 
   // Load WebSocket URL from extension storage, then start
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-    chrome.storage.sync.get({ wsUrl: DEFAULT_WS_URL }, (result) => {
+    chrome.storage.sync.get({ wsUrl: DEFAULT_WS_URL, wsToken: '' }, (result) => {
       WS_URL = result.wsUrl || DEFAULT_WS_URL;
+      WS_TOKEN = result.wsToken || '';
       console.log(`[TheoChat] WebSocket URL: ${WS_URL}`);
       waitForChatContainer();
     });

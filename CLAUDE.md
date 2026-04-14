@@ -46,4 +46,16 @@ We should make whatever is needed to accomplish this, i.e. an app, website, Zen 
 ## Project Structure
 ```
 theo_chat/
-├── servi
+├── service/          # Node.js gRPC + WebSocket service (runs on Railway or desktop)
+├── extension/        # Zen/Chrome Manifest V3 browser extension
+├── worker/           # Cloudflare Worker source (t3yt.mikepfunk.com)
+├── wrangler.toml     # Cloudflare Worker config
+├── oauth.json        # Google OAuth credentials (GITIGNORED — do not commit)
+└── .claude/          # Harness checkpoints
+```
+
+## Sensitive Files (never commit)
+- `oauth.json` — Google OAuth client credentials
+- `service/config.json` — local service config
+- `service/.tokens.json` — OAuth refresh tokens
+- Any `.env` files
