@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 main = "worker/src/index.js"
 
 routes = [
-  { pattern = "t3yt.mikepfunk.com/*", zone_name = "mikepfunk.com" }
+  { pattern = "t3yt.mikepfunk.com", custom_domain = true }
 ]
 
 [env.preview]
