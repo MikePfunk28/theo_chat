@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TheoChat</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="rig">
+    <header class="rig__head">
+      <div class="wordmark">
+        <span class="wordmark__t">THEO</span><span class="wordmark__dot"></span><span class="wordmark__c">CHAT</span>
+      </div>
+      <div class="version" id="version">v1.0</div>
+    </header>
+
+    <section class="signals" aria-label="Status signals">
+      <div class="signal" data-signal="service">
+        <span class="signal__led" data-state="idle"></span>
+        <span class="signal__label">SERVICE</span>
+        <span class="signal__value" id="svcState">—</span>
+      </div>
+      <div class="signal" data-signal="youtube">
+        <span class="signal__led" data-state="idle"></span>
+        <span class="signal__label">YOUTUBE</span>
+        <span class="signal__value" id="ytState">—</span>
+      </div>
+      <div class="signal" data-signal="twitch">
+        <span class="signal__led" data-state="idle"></span>
+        <span class="signal__label">INJECT</span>
+        <span class="signal__value" id="twState">—</span>
+      </div>
+    </section>
+
+    <section class="master">
+      <button id="toggle" class="toggle" aria-pressed="true">
+        <span class="toggle__track">
+          <span class="toggle__thumb"></span>
+        </span>
+        <span class="toggle__legend">
+          <span class="toggle__state" id="toggleState">BRIDGE ON</span>
+          <span class="toggle__hint" id="toggleHint">Injecting YouTube into Twitch chat</span>
+        </span>
+      </button>
+    </section>
+
+    <section class="delay">
+      <header class="delay__head">
+        <h2 class="delay__title">MOD BUFFER</h2>
+        <output class="delay__readout" id="delayReadout">0s</output>
+      </header>
+      <input type="range" id="delaySlider" min="0" max="30" step="1" value="0" class="delay__slider" aria-label="Delay in seconds">
+      <div class="delay__ticks" aria-hidden="true">
+        <span>0</span><span>5</span><span>10</span><span>15</span><span>20</span><span>25</span><span>30</span>
+      </div>
+      <p class="delay__explain" id="delayExplain">No delay — messages appear the instant YouTube sends them.</p>
+    </section>
+
+    <section class="telemetry">
+      <div class="telemetry__cell">
+        <span class="telemetry__val" id="statPending">0</span>
+        <span class="telemetry__key">BUFFERED</span>
+      </div>
+      <div class="telemetry__cell">
+        <span class="telemetry__val" id="statCount">0</span>
+        <span class="telemetry__key">TODAY</span>
+      </div>
+      <div class="telemetry__cell">
+        <span class="telemetry__val" id="statLast">—</span>
+        <span class="telemetry__key">LAST MSG</span>
+      </div>
+    </section>
+
+    <footer class="rig__foot">
+      <a id="openOptions" href="#" class="foot__link">Advanced</a>
+      <span class="foot__stamp" id="endpoint">—</span>
+    </footer>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

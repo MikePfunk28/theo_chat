@@ -3,7 +3,12 @@
   "name": "TheoChat — YouTube in Twitch",
   "version": "1.0.0",
   "description": "Injects YouTube live chat messages into Twitch chat for a unified view.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["*://*.up.railway.app/*", "https://t3yt.mikepfunk.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TheoChat"
+  },
   "options_ui": {
     "page": "options.html",
     "open_in_tab": false
@@ -19,5 +24,11 @@
   "icons": {
     "48": "icon48.png",
     "128": "icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "theochat@mikepfunk.com",
+      "strict_min_version": "128.0"
+    }
   }
 }

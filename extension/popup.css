@@ -1,0 +1,385 @@
+/* TheoChat control rig — brutalist/industrial streaming kit aesthetic */
+
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Instrument+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --stage: oklch(0.14 0.012 270);
+  --stage-raised: oklch(0.18 0.014 270);
+  --stage-deep: oklch(0.10 0.008 270);
+  --line: oklch(0.26 0.015 270);
+  --line-hot: oklch(0.42 0.02 270);
+  --ink: oklch(0.96 0.005 270);
+  --ink-muted: oklch(0.66 0.015 270);
+  --ink-dim: oklch(0.46 0.018 270);
+  --yt: oklch(0.64 0.24 28);
+  --tw: oklch(0.68 0.21 295);
+  --live: oklch(0.80 0.19 152);
+  --caution: oklch(0.80 0.17 85);
+  --radius-sharp: 2px;
+  --radius-soft: 6px;
+  --space: clamp(10px, 2.5vw, 14px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 380px;
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--stage);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background:
+    linear-gradient(180deg, oklch(0.14 0.018 270) 0%, var(--stage) 40%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 31px,
+      oklch(0.18 0.01 270 / 0.25) 31px 32px
+    );
+}
+
+.rig {
+  padding: 18px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ─── Header ───────────────────────────────────────────────── */
+
+.rig__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.wordmark {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.wordmark__t { color: var(--ink); }
+.wordmark__c { color: var(--ink); }
+.wordmark__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--yt);
+  border-radius: 50%;
+  margin: 0 3px 2px;
+  box-shadow: 0 0 8px oklch(0.64 0.24 28 / 0.6);
+}
+
+.version {
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  letter-spacing: 0.08em;
+}
+
+/* ─── Signal strip (3 LEDs) ────────────────────────────────── */
+
+.signals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.signal {
+  background: var(--stage-deep);
+  padding: 10px 10px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}
+
+.signal__led {
+  width: 7px;
+  height: 7px;
+  background: var(--ink-dim);
+  border-radius: 50%;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  transition: background 180ms cubic-bezier(.22,1,.36,1), box-shadow 180ms;
+}
+.signal__led[data-state="ok"] {
+  background: var(--live);
+  box-shadow: 0 0 8px oklch(0.80 0.19 152 / 0.7);
+}
+.signal__led[data-state="live"] {
+  background: var(--yt);
+  box-shadow: 0 0 10px oklch(0.64 0.24 28 / 0.8);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.signal__led[data-state="warn"] {
+  background: var(--caution);
+  box-shadow: 0 0 8px oklch(0.80 0.17 85 / 0.7);
+}
+.signal__led[data-state="off"] {
+  background: oklch(0.34 0.08 28);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.signal__label {
+  font-family: 'Syne', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--ink-dim);
+}
+
+.signal__value {
+  font-family: 'Syne', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+/* ─── Master toggle — hero interaction ─────────────────────── */
+
+.master {
+  padding: 0;
+}
+
+.toggle {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 14px 13px;
+  background: var(--stage-raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--live);
+  transition: border-color 160ms cubic-bezier(.22,1,.36,1), background 160ms;
+}
+.toggle:hover { background: oklch(0.21 0.015 270); }
+.toggle:focus-visible { outline: 2px solid var(--tw); outline-offset: 2px; }
+.toggle[aria-pressed="false"] {
+  border-left-color: oklch(0.38 0.08 28);
+}
+
+.toggle__track {
+  width: 48px;
+  height: 26px;
+  background: var(--stage-deep);
+  border: 1px solid var(--line-hot);
+  display: block;
+  position: relative;
+  transition: background 160ms;
+}
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: var(--live);
+  transition: transform 220ms cubic-bezier(.22,1,.36,1), background 160ms;
+}
+.toggle[aria-pressed="false"] .toggle__thumb {
+  transform: translateX(22px);
+  background: oklch(0.55 0.12 28);
+}
+
+.toggle__legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+.toggle__state {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.toggle__hint {
+  font-size: 11px;
+  color: var(--ink-muted);
+  line-height: 1.3;
+}
+
+/* ─── Delay rail ───────────────────────────────────────────── */
+
+.delay {
+  padding: 14px 14px 12px;
+  background: var(--stage-raised);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delay__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.delay__title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--ink-muted);
+}
+.delay__readout {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Custom range track */
+.delay__slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+  margin: 4px 0 2px;
+}
+.delay__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: linear-gradient(
+    to right,
+    var(--caution) 0%,
+    var(--caution) var(--fill, 0%),
+    var(--line-hot) var(--fill, 0%),
+    var(--line-hot) 100%
+  );
+}
+.delay__slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 18px;
+  background: var(--ink);
+  margin-top: -7px;
+  border: 0;
+  box-shadow: 0 0 0 1px var(--stage-deep);
+}
+.delay__slider::-moz-range-track {
+  height: 4px;
+  background: var(--line-hot);
+}
+.delay__slider::-moz-range-thumb {
+  width: 14px;
+  height: 18px;
+  background: var(--ink);
+  border: 0;
+  border-radius: 0;
+}
+
+.delay__ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  font-family: 'Syne', sans-serif;
+  font-weight: 500;
+  font-size: 9px;
+  color: var(--ink-dim);
+  letter-spacing: 0.05em;
+}
+
+.delay__explain {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  min-height: 2.6em;
+}
+.delay__explain strong {
+  color: var(--caution);
+  font-weight: 600;
+}
+
+/* ─── Telemetry row ────────────────────────────────────────── */
+
+.telemetry {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.telemetry__cell {
+  background: var(--stage-deep);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+.telemetry__val {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.telemetry__key {
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+}
+
+/* ─── Footer ───────────────────────────────────────────────── */
+
+.rig__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  font-size: 10px;
+  color: var(--ink-dim);
+  letter-spacing: 0.04em;
+}
+.foot__link {
+  color: var(--tw);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--tw);
+}
+.foot__link:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.foot__stamp {
+  font-family: 'Syne', sans-serif;
+  font-weight: 500;
+  font-size: 9px;
+  color: var(--ink-dim);
+  letter-spacing: 0.06em;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

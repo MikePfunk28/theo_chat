@@ -11,6 +11,16 @@
   let WS_URL = DEFAULT_WS_URL;
   let WS_TOKEN = '';
 
+  // ─── Settings (synced with popup) ─────────────────────────────
+  let ENABLED = true;       // master on/off
+  let DELAY_MS = 0;         // mod buffer: hold messages N ms before injecting
+  let messagesToday = 0;    // counter for popup stats
+  let lastMessageAt = null; // timestamp for popup stats
+
+  // ─── Pending message queue (for delay buffer) ─────────────────
+  // Each entry: { event, timerId, injectAt }
+  const pendingQueue = new Map(); // messageId -> entry
+
   // Twitch chat selectors — if Twitch changes their DOM, update these
   const SELECTORS = {
     // The scrollable container that holds all chat messages
@@ -151,28 +161,62 @@
 
   function handleEvent(event) {
     if (!chatContainer) return;
+    if (!ENABLED) return;  // master toggle
 
     switch (event.type) {
       case 'yt.message.created':
-        injectChatMessage(event);
+        queueOrInject(event);
         break;
 
       case 'yt.message.deleted':
-        deleteMessage(event.messageId);
+        // If still pending, drop silently. Otherwise remove from DOM.
+        if (pendingQueue.has(event.messageId)) {
+          const entry = pendingQueue.get(event.messageId);
+          clearTimeout(entry.timerId);
+          pendingQueue.delete(event.messageId);
+        } else {
+          deleteMessage(event.messageId);
+        }
         break;
 
       case 'yt.user.banned':
+        // Drop all pending from this user + remove any already-injected
+        for (const [msgId, entry] of pendingQueue) {
+          if (entry.event.userId === event.userId) {
+            clearTimeout(entry.timerId);
+            pendingQueue.delete(msgId);
+          }
+        }
         banUser(event.userId, event.bannedMessageIds || []);
         break;
 
       case 'yt.chat.ended':
+        // Flush the queue so nothing gets injected after chat is gone
+        for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
+        pendingQueue.clear();
         injectSystemMessage('YouTube live chat ended');
         break;
 
       case 'system.connected':
-        // Already handled in onopen
         break;
     }
+  }
+
+  function queueOrInject(event) {
+    if (DELAY_MS <= 0) {
+      injectChatMessage(event);
+      messagesToday++;
+      lastMessageAt = Date.now();
+      return;
+    }
+    // Hold for DELAY_MS — gives mods a window to delete before it ever appears
+    const timerId = setTimeout(() => {
+      pendingQueue.delete(event.messageId);
+      injectChatMessage(event);
+      messagesToday++;
+      lastMessageAt = Date.now();
+    }, DELAY_MS);
+    pendingQueue.set(event.messageId, { event, timerId, injectAt: Date.now() + DELAY_MS });
   }
 
   // ─── DOM Injection ───────────────────────────────────────────
@@ -308,12 +352,65 @@
   console.log('[TheoChat] Extension loaded');
 
   // Load WebSocket URL from extension storage, then start
+  const CONFIG_URL = 'https://t3yt.mikepfunk.com/api/config';
+
+  async function resolveWsUrl(storedUrl) {
+    // Try live config first — if CF Worker knows the Railway URL, use it
+    try {
+      const res = await fetch(CONFIG_URL, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data.wsUrl === 'string' && data.wsUrl) {
+          chrome.storage.sync.set({ wsUrl: data.wsUrl });
+          console.log(`[TheoChat] Fetched WS URL from config: ${data.wsUrl}`);
+          return data.wsUrl;
+        }
+      }
+    } catch (e) {
+      console.log('[TheoChat] Config fetch failed, using stored URL');
+    }
+    return storedUrl || DEFAULT_WS_URL;
+  }
+
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-    chrome.storage.sync.get({ wsUrl: DEFAULT_WS_URL, wsToken: '' }, (result) => {
-      WS_URL = result.wsUrl || DEFAULT_WS_URL;
-      WS_TOKEN = result.wsToken || '';
-      console.log(`[TheoChat] WebSocket URL: ${WS_URL}`);
-      waitForChatContainer();
+    chrome.storage.sync.get(
+      { wsUrl: DEFAULT_WS_URL, wsToken: '', enabled: true, delayMs: 0 },
+      async (result) => {
+        WS_URL = await resolveWsUrl(result.wsUrl);
+        WS_TOKEN = result.wsToken || '';
+        ENABLED = result.enabled !== false;
+        DELAY_MS = Math.max(0, parseInt(result.delayMs, 10) || 0);
+        console.log(`[TheoChat] WebSocket URL: ${WS_URL} | enabled=${ENABLED} | delay=${DELAY_MS}ms`);
+        waitForChatContainer();
+      }
+    );
+
+    // Listen for live settings changes from the popup
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (msg.type === 'theochat.setEnabled') {
+        ENABLED = !!msg.value;
+        if (!ENABLED) {
+          // Flush queue + clear injected YT messages when disabled
+          for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
+          pendingQueue.clear();
+          if (chatContainer) {
+            chatContainer.querySelectorAll('.theochat-msg').forEach((el) => el.remove());
+          }
+        }
+      } else if (msg.type === 'theochat.setDelay') {
+        DELAY_MS = Math.max(0, parseInt(msg.value, 10) || 0);
+      } else if (msg.type === 'theochat.getStatus') {
+        sendResponse({
+          enabled: ENABLED,
+          delayMs: DELAY_MS,
+          connected: isConnected,
+          pending: pendingQueue.size,
+          messagesToday,
+          lastMessageAt,
+          wsUrl: WS_URL,
+        });
+        return true; // async response
+      }
     });
   } else {
     waitForChatContainer();

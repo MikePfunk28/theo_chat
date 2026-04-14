@@ -1,80 +1,55 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0e0e10;
-      color: #efeff1;
-      padding: 1.5rem;
-      min-width: 360px;
-    }
-    h2 {
-      font-size: 1.1rem;
-      margin-bottom: 1rem;
-      background: linear-gradient(135deg, #ff0000, #9146ff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    label {
-      display: block;
-      color: #adadb8;
-      font-size: 0.85rem;
-      margin-bottom: 0.4rem;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 0.5rem;
-      border: 1px solid #303032;
-      border-radius: 6px;
-      background: #18181b;
-      color: #efeff1;
-      font-size: 0.9rem;
-      margin-bottom: 1rem;
-    }
-    input[type="text"]:focus {
-      outline: none;
-      border-color: #9146ff;
-    }
-    button {
-      background: #9146ff;
-      color: white;
-      border: none;
-      padding: 0.5rem 1.2rem;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.9rem;
-    }
-    button:hover { background: #772ce8; }
-    .status {
-      margin-top: 0.75rem;
-      font-size: 0.85rem;
-      color: #00ad03;
-      display: none;
-    }
-    .hint {
-      color: #606064;
-      font-size: 0.75rem;
-      margin-top: -0.6rem;
-      margin-bottom: 1rem;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>TheoChat — Advanced</title>
+<link rel="stylesheet" href="options.css">
 </head>
 <body>
-  <h2>TheoChat Settings</h2>
+<main class="rig">
+  <header class="rig__head">
+    <div class="wordmark">
+      <span class="wordmark__t">THEO</span><span class="wordmark__dot"></span><span class="wordmark__c">CHAT</span>
+    </div>
+    <span class="head__tag">ADVANCED</span>
+  </header>
 
-  <label for="wsUrl">WebSocket URL</label>
-  <input type="text" id="wsUrl" placeholder="wss://your-railway-app.up.railway.app">
-  <p class="hint">The URL of your TheoChat service. Use ws:// for local, wss:// for Railway.</p>
+  <section class="intro">
+    <p class="intro__tag">MANUAL OVERRIDE</p>
+    <h1 class="intro__title">This is auto-configured.</h1>
+    <p class="intro__body">The extension fetches its connection URL automatically from <a href="https://t3yt.mikepfunk.com/api/config" target="_blank" rel="noopener">t3yt.mikepfunk.com</a>. Only use the overrides below if the auto-fetch fails or you need to point at a different service instance for testing.</p>
+  </section>
 
-  <label for="wsToken">Connection Token</label>
-  <input type="text" id="wsToken" placeholder="(optional)">
-  <p class="hint">Token for authenticating with the service. Leave blank if none is set.</p>
+  <section class="form">
+    <div class="field">
+      <label for="wsUrl" class="field__label">WEBSOCKET URL OVERRIDE</label>
+      <input type="text" id="wsUrl" class="field__input" placeholder="wss://theochat-production.up.railway.app" spellcheck="false">
+      <p class="field__hint" id="wsHint">Leave empty to use auto-config. Must begin with <code>wss://</code> for production, <code>ws://</code> for local.</p>
+    </div>
 
-  <button id="save">Save</button>
-  <button id="test" style="background: #303032; margin-left: 0.5rem;">Test Connection</button>
-  <div class="status" id="status">Settings saved!</div>
+    <div class="field">
+      <label for="wsToken" class="field__label">CONNECTION TOKEN</label>
+      <input type="text" id="wsToken" class="field__input" placeholder="optional" spellcheck="false">
+      <p class="field__hint">Only set if the service requires a token. Blank otherwise.</p>
+    </div>
 
-  <script src="options.js"></script>
+    <div class="actions">
+      <button id="saveBtn" type="button" class="btn btn--primary">Save</button>
+      <button id="testBtn" type="button" class="btn btn--ghost">Test connection</button>
+      <button id="resetBtn" type="button" class="btn btn--ghost">Reset to auto</button>
+    </div>
+
+    <div class="status" id="status" data-state="idle">
+      <span class="status__led"></span>
+      <span class="status__text" id="statusText">Ready.</span>
+    </div>
+  </section>
+
+  <footer class="rig__foot">
+    <span>v<span id="version"></span></span>
+    <a href="https://t3yt.mikepfunk.com" target="_blank" rel="noopener">t3yt.mikepfunk.com</a>
+  </footer>
+</main>
+<script src="options.js"></script>
 </body>
 </html>

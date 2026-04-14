@@ -1,60 +1,92 @@
-// TheoChat — Options page script
+// TheoChat — Advanced / options page
+// Manual override for the auto-discovered WebSocket URL + optional token.
 
-const DEFAULT_WS_URL = 'ws://localhost:9300';
+const els = {
+  wsUrl:    document.getElementById('wsUrl'),
+  wsToken:  document.getElementById('wsToken'),
+  wsHint:   document.getElementById('wsHint'),
+  save:     document.getElementById('saveBtn'),
+  test:     document.getElementById('testBtn'),
+  reset:    document.getElementById('resetBtn'),
+  status:   document.getElementById('status'),
+  statusText: document.getElementById('statusText'),
+  version:  document.getElementById('version'),
+};
 
-document.addEventListener('DOMContentLoaded', () => {
-  const wsUrlInput = document.getElementById('wsUrl');
-  const wsTokenInput = document.getElementById('wsToken');
-  const saveBtn = document.getElementById('save');
-  const testBtn = document.getElementById('test');
-  const statusEl = document.getElementById('status');
+document.addEventListener('DOMContentLoaded', init);
 
-  // Load saved settings
-  chrome.storage.sync.get({ wsUrl: DEFAULT_WS_URL, wsToken: '' }, (result) => {
-    wsUrlInput.value = result.wsUrl;
-    wsTokenInput.value = result.wsToken;
+async function init() {
+  els.version.textContent = chrome.runtime.getManifest().version;
+
+  const stored = await chrome.storage.sync.get({ wsUrl: '', wsToken: '' });
+  els.wsUrl.value   = stored.wsUrl || '';
+  els.wsToken.value = stored.wsToken || '';
+
+  els.save.addEventListener('click', save);
+  els.test.addEventListener('click', testConnection);
+  els.reset.addEventListener('click', resetToAuto);
+  els.wsUrl.addEventListener('input', validateUrl);
+
+  validateUrl();
+}
+
+function validateUrl() {
+  const v = els.wsUrl.value.trim();
+  if (!v) {
+    els.wsUrl.classList.remove('is-invalid');
+    return true;
+  }
+  const ok = /^wss?:\/\/.+/.test(v);
+  els.wsUrl.classList.toggle('is-invalid', !ok);
+  return ok;
+}
+
+async function save() {
+  if (!validateUrl()) {
+    return setStatus('err', 'URL must start with ws:// or wss://');
+  }
+  await chrome.storage.sync.set({
+    wsUrl:   els.wsUrl.value.trim(),
+    wsToken: els.wsToken.value.trim(),
   });
+  setStatus('ok', 'Saved. Reload the Twitch tab to apply.');
+}
 
-  // Save settings
-  saveBtn.addEventListener('click', () => {
-    const wsUrl = wsUrlInput.value.trim() || DEFAULT_WS_URL;
-    const wsToken = wsTokenInput.value.trim();
-    chrome.storage.sync.set({ wsUrl, wsToken }, () => {
-      statusEl.textContent = 'Settings saved!';
-      statusEl.style.color = '#00ad03';
-      statusEl.style.display = 'block';
-      setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
-    });
-  });
+async function resetToAuto() {
+  await chrome.storage.sync.remove(['wsUrl', 'wsToken']);
+  els.wsUrl.value = '';
+  els.wsToken.value = '';
+  setStatus('ok', 'Reset. Extension will auto-fetch the URL on next load.');
+}
 
-  // Test connection
-  testBtn.addEventListener('click', () => {
-    const wsUrl = wsUrlInput.value.trim() || DEFAULT_WS_URL;
-    const wsToken = wsTokenInput.value.trim();
-    const url = wsToken ? `${wsUrl}?token=${encodeURIComponent(wsToken)}` : wsUrl;
+async function testConnection() {
+  const url = els.wsUrl.value.trim();
+  const token = els.wsToken.value.trim();
+  if (!url) return setStatus('warn', 'Enter a URL to test.');
+  if (!validateUrl()) return setStatus('err', 'URL must start with ws:// or wss://');
 
-    statusEl.textContent = 'Connecting...';
-    statusEl.style.color = '#adadb8';
-    statusEl.style.display = 'block';
+  setStatus('warn', 'Connecting…');
+  const full = token ? `${url}?token=${encodeURIComponent(token)}` : url;
 
-    const ws = new WebSocket(url);
-    const timeout = setTimeout(() => {
-      ws.close();
-      statusEl.textContent = 'Connection timed out';
-      statusEl.style.color = '#ff4444';
-    }, 5000);
+  try {
+    const ws = new WebSocket(full);
+    const t = setTimeout(() => { ws.close(); setStatus('err', 'Connection timed out.'); }, 5000);
 
     ws.onopen = () => {
-      clearTimeout(timeout);
-      statusEl.textContent = 'Connected!';
-      statusEl.style.color = '#00ad03';
+      clearTimeout(t);
+      setStatus('ok', 'Connected.');
       ws.close();
     };
-
     ws.onerror = () => {
-      clearTimeout(timeout);
-      statusEl.textContent = 'Connection failed';
-      statusEl.style.color = '#ff4444';
+      clearTimeout(t);
+      setStatus('err', 'Connection failed.');
     };
-  });
-});
+  } catch (e) {
+    setStatus('err', 'Invalid URL.');
+  }
+}
+
+function setStatus(state, text) {
+  els.status.dataset.state = state;
+  els.statusText.textContent = text;
+}

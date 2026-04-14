@@ -1,0 +1,253 @@
+/* TheoChat — Advanced/Options (shares design tokens with popup.css) */
+
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Instrument+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --stage: oklch(0.14 0.012 270);
+  --stage-raised: oklch(0.18 0.014 270);
+  --stage-deep: oklch(0.10 0.008 270);
+  --line: oklch(0.26 0.015 270);
+  --line-hot: oklch(0.42 0.02 270);
+  --ink: oklch(0.96 0.005 270);
+  --ink-muted: oklch(0.66 0.015 270);
+  --ink-dim: oklch(0.46 0.018 270);
+  --yt: oklch(0.64 0.24 28);
+  --tw: oklch(0.68 0.21 295);
+  --live: oklch(0.80 0.19 152);
+  --caution: oklch(0.80 0.17 85);
+  --danger: oklch(0.65 0.22 28);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--stage);
+  -webkit-font-smoothing: antialiased;
+  min-width: 480px;
+  min-height: 100vh;
+}
+
+body {
+  background:
+    linear-gradient(180deg, oklch(0.14 0.018 270) 0%, var(--stage) 40%),
+    repeating-linear-gradient(90deg, transparent 0 95px, oklch(0.18 0.01 270 / 0.3) 95px 96px);
+}
+
+.rig {
+  max-width: 560px;
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ─── Header ─────────────────────────────────────────────── */
+
+.rig__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.wordmark {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.wordmark__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--yt);
+  border-radius: 50%;
+  margin: 0 3px 2px;
+  box-shadow: 0 0 8px oklch(0.64 0.24 28 / 0.6);
+}
+
+.head__tag {
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--caution);
+}
+
+/* ─── Intro ──────────────────────────────────────────────── */
+
+.intro__tag {
+  font-family: 'Syne', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--yt);
+  margin-bottom: 14px;
+}
+.intro__title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 28px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+.intro__body {
+  color: var(--ink-muted);
+  line-height: 1.55;
+  max-width: 56ch;
+}
+.intro__body a {
+  color: var(--tw);
+  border-bottom: 1px dotted var(--tw);
+  text-decoration: none;
+}
+.intro__body a:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* ─── Form ───────────────────────────────────────────────── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 22px 20px;
+  background: var(--stage-raised);
+  border: 1px solid var(--line);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field__label {
+  font-family: 'Syne', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--ink-muted);
+}
+
+.field__input {
+  all: unset;
+  display: block;
+  width: 100%;
+  padding: 11px 12px;
+  background: var(--stage-deep);
+  border: 1px solid var(--line-hot);
+  color: var(--ink);
+  font-family: 'Instrument Sans', monospace;
+  font-size: 14px;
+  letter-spacing: 0;
+  transition: border-color 140ms cubic-bezier(.22,1,.36,1);
+}
+.field__input::placeholder { color: var(--ink-dim); }
+.field__input:focus { border-color: var(--tw); outline: none; }
+.field__input.is-invalid { border-color: var(--danger); }
+
+.field__hint {
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.45;
+}
+.field__hint code {
+  font-family: 'Instrument Sans', monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  background: var(--stage-deep);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+}
+
+/* ─── Actions ────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.btn {
+  all: unset;
+  cursor: pointer;
+  padding: 10px 18px 9px;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  transition: background 140ms, border-color 140ms;
+}
+.btn--primary {
+  background: var(--stage-deep);
+  color: var(--ink);
+  border-left: 3px solid var(--live);
+}
+.btn--primary:hover { background: oklch(0.21 0.015 270); }
+
+.btn--ghost {
+  background: transparent;
+  color: var(--ink-muted);
+  border-left: 3px solid var(--line-hot);
+}
+.btn--ghost:hover { color: var(--ink); border-left-color: var(--tw); }
+
+.btn:focus-visible { outline: 2px solid var(--tw); outline-offset: 2px; }
+
+/* ─── Status ─────────────────────────────────────────────── */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--stage-deep);
+  border: 1px solid var(--line);
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+.status__led {
+  width: 8px;
+  height: 8px;
+  background: var(--ink-dim);
+  border-radius: 50%;
+  transition: background 180ms;
+}
+.status[data-state="ok"] .status__led { background: var(--live); box-shadow: 0 0 8px oklch(0.80 0.19 152 / 0.7); }
+.status[data-state="ok"] .status__text { color: var(--live); }
+.status[data-state="err"] .status__led { background: var(--danger); box-shadow: 0 0 8px oklch(0.65 0.22 28 / 0.7); }
+.status[data-state="err"] .status__text { color: var(--danger); }
+.status[data-state="warn"] .status__led { background: var(--caution); box-shadow: 0 0 8px oklch(0.80 0.17 85 / 0.6); }
+.status[data-state="warn"] .status__text { color: var(--caution); }
+
+/* ─── Footer ─────────────────────────────────────────────── */
+
+.rig__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+}
+.rig__foot a {
+  color: var(--tw);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--tw);
+}
+.rig__foot a:hover { color: var(--ink); border-bottom-color: var(--ink); }

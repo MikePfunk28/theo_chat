@@ -1,226 +1,241 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>TheoChat OBS Overlay</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: transparent;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      font-size: 14px;
-      color: #efeff1;
-      overflow: hidden;
-    }
-    #chat {
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-      height: 100vh;
-      padding: 8px;
-    }
-    .msg {
-      padding: 4px 8px;
-      margin-bottom: 2px;
-      line-height: 1.4;
-      word-wrap: break-word;
-      animation: fadeIn 0.15s ease-in;
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .badge {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 1px 4px;
-      border-radius: 3px;
-      margin-right: 4px;
-      vertical-align: middle;
-    }
-    .badge-yt { background: #ff0000; color: #fff; }
-    .badge-owner { background: #ffd600; color: #000; }
-    .badge-mod { background: #5e84f1; color: #fff; }
-    .badge-member { background: #2ba640; color: #fff; }
-    .badge-sc { background: #f57c00; color: #fff; }
-    .avatar {
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      vertical-align: middle;
-      margin-right: 4px;
-    }
-    .author {
-      font-weight: 700;
-      margin-right: 4px;
-    }
-    .system {
-      color: #adadb8;
-      font-style: italic;
-      padding: 4px 8px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>TheoChat Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --yt: oklch(0.64 0.24 28);
+    --owner: oklch(0.86 0.18 85);
+    --mod: oklch(0.68 0.21 255);
+    --member: oklch(0.76 0.19 152);
+    --sc: oklch(0.78 0.17 55);
+    --ink: oklch(0.98 0.005 270);
+    --ink-muted: oklch(0.72 0.015 270);
+    --shadow: 0 1px 2px oklch(0 0 0 / 0.82), 0 0 18px oklch(0 0 0 / 0.35);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: transparent;
+    font-family: 'Instrument Sans', system-ui, sans-serif;
+    font-size: 15px;
+    color: var(--ink);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #chat {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 100vh;
+    padding: 12px 14px;
+  }
+  .msg {
+    padding: 3px 0;
+    margin-bottom: 4px;
+    line-height: 1.42;
+    word-wrap: break-word;
+    text-shadow: var(--shadow);
+    animation: reveal 180ms cubic-bezier(.22, 1, .36, 1);
+  }
+  @keyframes reveal {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Badges — harmonized with popup: tight caps, sharp edges, no rounded pills */
+  .badge {
+    display: inline-block;
+    vertical-align: middle;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    padding: 2px 5px 1px;
+    margin-right: 5px;
+    text-shadow: none;
+    line-height: 1;
+    transform: translateY(-1px);
+  }
+  .badge-yt     { background: var(--yt);     color: oklch(0.16 0.01 270); }
+  .badge-owner  { background: var(--owner);  color: oklch(0.16 0.01 270); }
+  .badge-mod    { background: var(--mod);    color: oklch(0.98 0.005 270); }
+  .badge-member { background: var(--member); color: oklch(0.16 0.01 270); }
+  .badge-sc     { background: var(--sc);     color: oklch(0.16 0.01 270); }
+
+  .avatar {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 6px;
+    display: inline-block;
+    transform: translateY(-1px);
+  }
+
+  .author {
+    font-weight: 700;
+    margin-right: 3px;
+    letter-spacing: -0.005em;
+  }
+
+  .sep { color: var(--ink-muted); margin-right: 3px; }
+  .body { font-weight: 500; }
+
+  .system {
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    text-shadow: var(--shadow);
+    padding: 6px 0;
+  }
+</style>
 </head>
 <body>
-  <div id="chat"></div>
-  <script>
-    const MAX_MESSAGES = 50;
-    const chat = document.getElementById('chat');
+<div id="chat"></div>
+<script>
+  const MAX_MESSAGES = 50;
+  const chat = document.getElementById('chat');
 
-    // Read token from URL params: /overlay?token=xxx
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || '';
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token') || '';
 
-    // Build WebSocket URL relative to current host
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsBase = proto + '//' + window.location.host;
-    const wsUrl = token ? wsBase + '?token=' + encodeURIComponent(token) : wsBase;
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsBase = proto + '//' + window.location.host;
+  const wsUrl = token ? wsBase + '?token=' + encodeURIComponent(token) : wsBase;
 
-    let ws = null;
+  let ws = null;
 
-    function connect() {
-      ws = new WebSocket(wsUrl);
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = function () { addSystem('OVERLAY CONNECTED'); };
+    ws.onmessage = function (e) {
+      try { handleEvent(JSON.parse(e.data)); } catch {}
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { ws.close(); };
+  }
 
-      ws.onopen = function() {
-        addSystem('TheoChat overlay connected');
-      };
+  function handleEvent(event) {
+    switch (event.type) {
+      case 'yt.message.created':
+        addMessage(event);
+        break;
+      case 'yt.message.deleted':
+        removeMessage(event.messageId);
+        break;
+      case 'yt.user.banned':
+        removeUser(event.userId, event.bannedMessageIds || []);
+        break;
+      case 'yt.chat.ended':
+        addSystem('YOUTUBE CHAT ENDED');
+        break;
+    }
+  }
 
-      ws.onmessage = function(e) {
-        try {
-          var event = JSON.parse(e.data);
-          handleEvent(event);
-        } catch (err) { /* ignore parse errors */ }
-      };
+  function createBadge(text, className) {
+    var span = document.createElement('span');
+    span.className = 'badge ' + className;
+    span.textContent = text;
+    return span;
+  }
 
-      ws.onclose = function() {
-        setTimeout(connect, 3000);
-      };
+  function addMessage(event) {
+    var el = document.createElement('div');
+    el.className = 'msg';
+    el.setAttribute('data-msg-id', event.messageId);
+    el.setAttribute('data-user-id', event.userId);
 
-      ws.onerror = function() {
-        ws.close();
-      };
+    el.appendChild(createBadge('YT', 'badge-yt'));
+
+    for (var i = 0; i < event.badges.length; i++) {
+      var b = event.badges[i];
+      if      (b === 'owner')     el.appendChild(createBadge('OWNER', 'badge-owner'));
+      else if (b === 'moderator') el.appendChild(createBadge('MOD',   'badge-mod'));
+      else if (b === 'member')    el.appendChild(createBadge('MEMBER','badge-member'));
     }
 
-    function handleEvent(event) {
-      switch (event.type) {
-        case 'yt.message.created':
-          addMessage(event);
-          break;
-        case 'yt.message.deleted':
-          removeMessage(event.messageId);
-          break;
-        case 'yt.user.banned':
-          removeUser(event.userId, event.bannedMessageIds || []);
-          break;
-        case 'yt.chat.ended':
-          addSystem('YouTube live chat ended');
-          break;
-      }
+    if (event.isSuperChat && event.superChatAmount) {
+      el.appendChild(createBadge(event.superChatAmount, 'badge-sc'));
     }
 
-    function createBadge(text, className) {
-      var span = document.createElement('span');
-      span.className = 'badge ' + className;
-      span.textContent = text;
-      return span;
+    if (event.profileImageUrl) {
+      var img = document.createElement('img');
+      img.className = 'avatar';
+      img.src = event.profileImageUrl;
+      img.alt = '';
+      el.appendChild(img);
     }
 
-    function addMessage(event) {
-      var el = document.createElement('div');
-      el.className = 'msg';
-      el.setAttribute('data-msg-id', event.messageId);
-      el.setAttribute('data-user-id', event.userId);
+    var author = document.createElement('span');
+    author.className = 'author';
+    author.style.color = nameColor(event.displayName);
+    author.textContent = event.displayName;
+    el.appendChild(author);
 
-      // YT badge
-      el.appendChild(createBadge('YT', 'badge-yt'));
+    var sep = document.createElement('span');
+    sep.className = 'sep';
+    sep.textContent = ': ';
+    el.appendChild(sep);
 
-      // Role badges
-      for (var i = 0; i < event.badges.length; i++) {
-        var badge = event.badges[i];
-        if (badge === 'owner') el.appendChild(createBadge('Owner', 'badge-owner'));
-        else if (badge === 'moderator') el.appendChild(createBadge('Mod', 'badge-mod'));
-        else if (badge === 'member') el.appendChild(createBadge('Member', 'badge-member'));
-      }
+    var body = document.createElement('span');
+    body.className = 'body';
+    body.textContent = event.text;
+    el.appendChild(body);
 
-      // Super chat badge
-      if (event.isSuperChat && event.superChatAmount) {
-        el.appendChild(createBadge(event.superChatAmount, 'badge-sc'));
-      }
+    chat.appendChild(el);
+    pruneMessages();
+    chat.scrollTop = chat.scrollHeight;
+  }
 
-      // Avatar
-      if (event.profileImageUrl) {
-        var img = document.createElement('img');
-        img.className = 'avatar';
-        img.src = event.profileImageUrl;
-        img.alt = '';
-        el.appendChild(img);
-      }
+  function removeMessage(messageId) {
+    var el = chat.querySelector('[data-msg-id="' + CSS.escape(messageId) + '"]');
+    if (el) el.remove();
+  }
 
-      // Author name
-      var author = document.createElement('span');
-      author.className = 'author';
-      author.style.color = nameColor(event.displayName);
-      author.textContent = event.displayName;
-      el.appendChild(author);
-
-      // Separator
-      var sep = document.createElement('span');
-      sep.textContent = ': ';
-      el.appendChild(sep);
-
-      // Message text
-      var text = document.createElement('span');
-      text.textContent = event.text;
-      el.appendChild(text);
-
-      chat.appendChild(el);
-      pruneMessages();
-      chat.scrollTop = chat.scrollHeight;
-    }
-
-    function removeMessage(messageId) {
-      var el = chat.querySelector('[data-msg-id="' + CSS.escape(messageId) + '"]');
+  function removeUser(userId, bannedMessageIds) {
+    var els = chat.querySelectorAll('[data-user-id="' + CSS.escape(userId) + '"]');
+    for (var i = 0; i < els.length; i++) els[i].remove();
+    for (var j = 0; j < bannedMessageIds.length; j++) {
+      var el = chat.querySelector('[data-msg-id="' + CSS.escape(bannedMessageIds[j]) + '"]');
       if (el) el.remove();
     }
+  }
 
-    function removeUser(userId, bannedMessageIds) {
-      var els = chat.querySelectorAll('[data-user-id="' + CSS.escape(userId) + '"]');
-      for (var i = 0; i < els.length; i++) els[i].remove();
-      for (var j = 0; j < bannedMessageIds.length; j++) {
-        var el = chat.querySelector('[data-msg-id="' + CSS.escape(bannedMessageIds[j]) + '"]');
-        if (el) el.remove();
-      }
+  function addSystem(text) {
+    var el = document.createElement('div');
+    el.className = 'system';
+    el.textContent = text;
+    chat.appendChild(el);
+    pruneMessages();
+  }
+
+  function pruneMessages() {
+    while (chat.children.length > MAX_MESSAGES) {
+      chat.children[0].remove();
     }
+  }
 
-    function addSystem(text) {
-      var el = document.createElement('div');
-      el.className = 'system';
-      el.textContent = text;
-      chat.appendChild(el);
-      pruneMessages();
+  /* Deterministic author color — tinted to OKLCH neighborhood so colors feel cohesive */
+  function nameColor(name) {
+    var colors = [
+      'oklch(0.78 0.18 28)',  'oklch(0.80 0.15 55)',  'oklch(0.80 0.17 85)',
+      'oklch(0.82 0.16 152)', 'oklch(0.80 0.16 180)', 'oklch(0.78 0.18 210)',
+      'oklch(0.76 0.19 255)', 'oklch(0.74 0.20 295)', 'oklch(0.78 0.18 330)'
+    ];
+    var hash = 0;
+    for (var i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
     }
+    return colors[Math.abs(hash) % colors.length];
+  }
 
-    function pruneMessages() {
-      while (chat.children.length > MAX_MESSAGES) {
-        chat.children[0].remove();
-      }
-    }
-
-    function nameColor(name) {
-      var colors = [
-        '#ff4444','#ff7f50','#ff69b4','#b8860b','#5f9ea0',
-        '#1e90ff','#8a2be2','#00ff7f','#daa520','#d2691e',
-        '#008000','#9acd32','#2e8b57','#da70d6','#e0b619'
-      ];
-      var hash = 0;
-      for (var i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      return colors[Math.abs(hash) % colors.length];
-    }
-
-    connect();
-  </script>
+  connect();
+</script>
 </body>
 </html>
