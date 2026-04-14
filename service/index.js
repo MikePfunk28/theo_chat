@@ -11,6 +11,8 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
+const PUBLIC_URL = process.env.PUBLIC_URL || ''; // e.g., https://t3yt.up.railway.app
+const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
 
 if (!API_KEY) {
   console.error('\n  YOUTUBE_API_KEY environment variable is required.\n');
@@ -38,6 +40,7 @@ let nextPageToken = '';
 const processedIds = new Set();
 const activeMessages = new Map(); // messageId -> { userId, displayName }
 let running = true;
+let isStreaming = false; // true while connected to an active gRPC stream
 
 // ─── YouTube REST API client (for stream discovery) ────────────
 const youtube = google.youtube({ version: 'v3', auth: API_KEY });
@@ -48,7 +51,8 @@ const overlayPath = require('path').join(__dirname, 'overlay.html');
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const parsedUrl = req.url.split('?')[0];
+  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  const parsedUrl = reqUrl.pathname;
 
   if (parsedUrl === '/health' || parsedUrl === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -56,7 +60,8 @@ const server = http.createServer((req, res) => {
       status: 'ok',
       clients: clientCount,
       liveChatId,
-      videoId
+      videoId,
+      streaming: isStreaming,
     }));
   } else if (parsedUrl === '/overlay') {
     try {
@@ -66,6 +71,39 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       res.writeHead(500);
       res.end('Overlay not found');
+    }
+  } else if (parsedUrl === '/webhook/youtube') {
+    // GET = PubSub verification challenge; POST = Atom feed notification
+    if (req.method === 'GET') {
+      const challenge = reqUrl.searchParams.get('hub.challenge');
+      const mode = reqUrl.searchParams.get('hub.mode');
+      if (challenge) {
+        console.log(`  [PubSub] Verification: mode=${mode}, echoing challenge`);
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end(challenge);
+      } else {
+        res.writeHead(400);
+        res.end('Missing hub.challenge');
+      }
+    } else if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        // Extract videoId from Atom feed via regex (no XML parser dep needed)
+        const match = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+        if (match) {
+          const notifiedVideoId = match[1];
+          console.log(`  [PubSub] Notification: videoId=${notifiedVideoId}`);
+          handleLiveCandidate(notifiedVideoId).catch((err) => {
+            console.error('  [PubSub] handleLiveCandidate error:', err.message);
+          });
+        }
+        res.writeHead(200);
+        res.end();
+      });
+    } else {
+      res.writeHead(405);
+      res.end('Method not allowed');
     }
   } else {
     res.writeHead(404);
@@ -109,91 +147,159 @@ server.listen(PORT, () => {
   console.log(`  [HTTP] Health check + WebSocket on port ${PORT}`);
 });
 
-// ─── Discover live stream ──────────────────────────────────────
-async function discoverLiveStream() {
+// ─── Check live status + get liveChatId (1 quota unit) ─────────
+async function checkIfLive(targetVideoId) {
+  const videoResponse = await youtube.videos.list({
+    id: [targetVideoId],
+    part: ['liveStreamingDetails', 'snippet'],
+  });
+
+  const item = videoResponse.data.items?.[0];
+  if (!item) return null;
+
+  const snippet = item.snippet || {};
+  const isLive = snippet.liveBroadcastContent === 'live';
+  const chatId = item.liveStreamingDetails?.activeLiveChatId;
+
+  if (isLive && chatId) {
+    console.log(`  [YT] Live: "${snippet.title}" (${targetVideoId})`);
+    return chatId;
+  }
+  console.log(`  [YT] ${targetVideoId} not live (liveBroadcastContent=${snippet.liveBroadcastContent})`);
+  return null;
+}
+
+// ─── One-time startup discovery (no polling) ───────────────────
+// Uses search.list only ONCE at boot if CHANNEL_ID is set and no VIDEO_ID.
+// After this, we rely on PubSub webhook notifications, NOT polling.
+async function startupDiscovery() {
   if (videoId) {
-    console.log(`  [YT] Using video ID: ${videoId}`);
-  } else if (CHANNEL_ID) {
-    console.log(`  [YT] Searching for live streams on channel ${CHANNEL_ID}...`);
+    const chatId = await checkIfLive(videoId);
+    if (chatId) { liveChatId = chatId; return true; }
+    return false;
+  }
+  if (!CHANNEL_ID) return false;
+
+  console.log(`  [YT] Startup check on channel ${CHANNEL_ID}...`);
+  try {
     const response = await youtube.search.list({
       channelId: CHANNEL_ID,
       eventType: 'live',
       type: ['video'],
-      part: ['id,snippet']
+      part: ['id,snippet'],
     });
-
-    if (response.data.items && response.data.items.length > 0) {
-      const live = response.data.items[0];
-      videoId = live.id.videoId;
-      console.log(`  [YT] Found live stream: "${live.snippet.title}" (${videoId})`);
-    } else {
-      console.log('  [YT] No active live stream found.');
+    const live = response.data.items?.[0];
+    if (!live) {
+      console.log('  [YT] Not live at startup. Waiting for PubSub notifications...');
       return false;
     }
-  }
-
-  // Get the live chat ID
-  const videoResponse = await youtube.videos.list({
-    id: [videoId],
-    part: ['liveStreamingDetails']
-  });
-
-  if (videoResponse.data.items && videoResponse.data.items.length > 0) {
-    liveChatId = videoResponse.data.items[0].liveStreamingDetails?.activeLiveChatId;
-    if (liveChatId) {
-      console.log(`  [YT] Live chat ID: ${liveChatId}`);
-      return true;
-    }
-    console.log('  [YT] Video found but no active live chat.');
+    videoId = live.id.videoId;
+    const chatId = await checkIfLive(videoId);
+    if (chatId) { liveChatId = chatId; return true; }
+  } catch (err) {
+    console.error(`  [YT] Startup discovery error: ${err.message}`);
   }
   return false;
 }
 
-// ─── gRPC stream ───────────────────────────────────────────────
+// ─── Handle a PubSub notification: verify, then connect ────────
+async function handleLiveCandidate(candidateVideoId) {
+  if (isStreaming) {
+    console.log(`  [YT] Already streaming ${videoId}, ignoring notification for ${candidateVideoId}`);
+    return;
+  }
+  const chatId = await checkIfLive(candidateVideoId);
+  if (!chatId) return;
+  videoId = candidateVideoId;
+  liveChatId = chatId;
+  connectGrpcStream().catch((err) => {
+    console.error('  [YT] gRPC error:', err.message);
+    isStreaming = false;
+  });
+}
+
+// ─── gRPC stream — runs until chat ends, then returns ──────────
 async function connectGrpcStream() {
   console.log('  [YT] Connecting to YouTube gRPC stream...');
+  isStreaming = true;
 
   const client = new V3DataLiveChatMessageServiceClient(
     'youtube.googleapis.com:443',
     grpc.credentials.createSsl()
   );
 
-  while (running) {
-    const request = new LiveChatMessageListRequest();
-    request.setLiveChatId(liveChatId);
-    request.setMaxResults(200);
-    request.setPartList(['snippet', 'authorDetails']);
-    if (nextPageToken) {
-      request.setPageToken(nextPageToken);
-    }
+  try {
+    while (running && isStreaming) {
+      const request = new LiveChatMessageListRequest();
+      request.setLiveChatId(liveChatId);
+      request.setMaxResults(200);
+      request.setPartList(['snippet', 'authorDetails']);
+      if (nextPageToken) request.setPageToken(nextPageToken);
 
-    const metadata = new grpc.Metadata();
-    metadata.add('x-goog-api-key', API_KEY);
+      const metadata = new grpc.Metadata();
+      metadata.add('x-goog-api-key', API_KEY);
 
-    const stream = client.streamList(request, metadata);
+      const stream = client.streamList(request, metadata);
 
-    try {
-      for await (const response of stream) {
-        const res = response.toObject();
-        processMessages(res.itemsList || []);
-        nextPageToken = response.getNextPageToken() || '';
-        if (!nextPageToken) break;
+      try {
+        for await (const response of stream) {
+          const res = response.toObject();
+          processMessages(res.itemsList || []);
+          nextPageToken = response.getNextPageToken() || '';
+          if (!nextPageToken) break;
+        }
+      } catch (err) {
+        if (!running) return;
+        if (err.code === 0 || (err.message && err.message.includes('stream ended'))) {
+          console.log('  [YT] Stream ended — returning to idle. Waiting for next PubSub notification.');
+        } else {
+          console.error(`  [YT] Stream error (code ${err.code}): ${err.message}`);
+        }
+        break;
       }
-    } catch (err) {
-      if (!running) return;
-      if (err.code === 0 || (err.message && err.message.includes('stream ended'))) {
-        console.log('  [YT] Stream ended, reconnecting...');
-      } else {
-        console.error(`  [YT] Stream error (code ${err.code}): ${err.message}`);
-      }
-      break;
     }
+  } finally {
+    isStreaming = false;
+    liveChatId = null;
+    nextPageToken = '';
+    broadcast({ type: 'yt.chat.ended' });
   }
+}
 
-  if (running) {
-    console.log('  [YT] Reconnecting in 2 seconds...');
-    await new Promise(r => setTimeout(r, 2000));
-    await connectGrpcStream();
+// ─── PubSub subscription ───────────────────────────────────────
+async function subscribeToPubSub() {
+  if (!CHANNEL_ID) {
+    console.log('  [PubSub] No CHANNEL_ID set; skipping subscription.');
+    return;
+  }
+  if (!PUBLIC_URL) {
+    console.log('  [PubSub] No PUBLIC_URL set; skipping subscription (will rely on startup check only).');
+    return;
+  }
+  const topic = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${CHANNEL_ID}`;
+  const callback = `${PUBLIC_URL.replace(/\/$/, '')}/webhook/youtube`;
+  const body = new URLSearchParams({
+    'hub.callback': callback,
+    'hub.topic': topic,
+    'hub.verify': 'async',
+    'hub.mode': 'subscribe',
+    'hub.lease_seconds': '432000', // 5 days
+  });
+
+  try {
+    const res = await fetch(HUB_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    if (res.status === 202) {
+      console.log(`  [PubSub] Subscription request sent for channel ${CHANNEL_ID} → ${callback}`);
+    } else {
+      const text = await res.text();
+      console.error(`  [PubSub] Subscription failed (${res.status}): ${text}`);
+    }
+  } catch (err) {
+    console.error(`  [PubSub] Subscription error: ${err.message}`);
   }
 }
 
@@ -286,28 +392,32 @@ function extractBadges(author) {
   return badges;
 }
 
-// ─── Main loop ─────────────────────────────────────────────────
+// ─── Startup — one check, then sit idle for webhooks ───────────
 async function main() {
   console.log('\n  ╔══════════════════════════════════════╗');
   console.log('  ║       TheoChat Service v1.0.0         ║');
   console.log('  ╚══════════════════════════════════════╝\n');
   console.log(`  [WS] Health check + WebSocket on port ${PORT}`);
 
-  while (running) {
-    try {
-      const found = await discoverLiveStream();
-      if (found) {
-        await connectGrpcStream();
-      } else {
-        console.log('  [YT] Retrying in 30 seconds...');
-        await new Promise(r => setTimeout(r, 30000));
-      }
-    } catch (err) {
-      console.error('  [YT] Error:', err.message);
-      console.log('  [YT] Retrying in 5 seconds...');
-      await new Promise(r => setTimeout(r, 5000));
+  // Subscribe to PubSub so YouTube pushes notifications when channel goes live
+  subscribeToPubSub().catch((err) => console.error('  [PubSub] setup error:', err.message));
+
+  // Renew subscription every 4 days (lease is 5 days)
+  setInterval(() => subscribeToPubSub().catch(() => {}), 4 * 24 * 60 * 60 * 1000);
+
+  // One-time startup check in case stream is already live when we boot
+  try {
+    const found = await startupDiscovery();
+    if (found) {
+      connectGrpcStream().catch((err) => {
+        console.error('  [YT] gRPC error:', err.message);
+        isStreaming = false;
+      });
     }
+  } catch (err) {
+    console.error('  [YT] Startup error:', err.message);
   }
+  // After this, NO polling. PubSub webhook drives everything.
 }
 
 // ─── Shutdown ──────────────────────────────────────────────────
