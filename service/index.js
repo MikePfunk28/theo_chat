@@ -11,7 +11,18 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
-const PUBLIC_URL = process.env.PUBLIC_URL || ''; // e.g., https://t3yt.up.railway.app
+// Auto-derive public URL from Railway env vars if not explicitly set.
+// Railway exposes RAILWAY_PUBLIC_DOMAIN (hostname only) and RAILWAY_STATIC_URL.
+function derivePublicUrl() {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  if (process.env.RAILWAY_STATIC_URL) {
+    const u = process.env.RAILWAY_STATIC_URL;
+    return u.startsWith('http') ? u : `https://${u}`;
+  }
+  return '';
+}
+const PUBLIC_URL = derivePublicUrl();
 const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
 
 if (!API_KEY) {
