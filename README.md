@@ -171,6 +171,29 @@ Same `extension/` folder works. `chrome://extensions` → Developer Mode → Loa
 
 ---
 
+## Release Playbook
+
+Publishing a new signed extension version:
+
+1. **Bump the version** in `extension/manifest.json` (e.g. `"version": "1.1.0"`)
+2. **Zip the extension folder contents** (files at zip root, not nested):
+   ```powershell
+   cd extension
+   Compress-Archive -Path .\* -DestinationPath ..\theochat-extension.zip -Force
+   ```
+3. **Submit to AMO** — [addons.mozilla.org/developers/addon/theochat/versions/submit/](https://addons.mozilla.org/developers/addon/theochat/versions/submit/) → upload the zip → choose **"On your own"** (unlisted) → wait ~1–60 min for auto-signing → download the signed `.xpi` from the **Manage Version** page
+4. **Rename the signed file to `theochat.xpi`** (required — the `/download` route depends on this exact filename)
+5. **Publish a GitHub Release:**
+   - Tag: `v1.1.0` (match `manifest.json` version)
+   - Title: `TheoChat 1.1.0`
+   - Attach `theochat.xpi` as a release asset
+   - Body: short changelog (what changed, bugs fixed)
+6. **Done.** The Worker's `/download` route always redirects to `releases/latest/download/theochat.xpi`, so `t3yt.mikepfunk.com/download` instantly serves the new version to anyone who clicks "Install".
+
+Existing extension users won't auto-update unless you also publish the `.xpi`'s `update_url` and add an `updates.json` manifest. For v1, manual re-install works; auto-update is a future enhancement.
+
+---
+
 ## Quota Math
 
 YouTube Data API has a default 10,000 units/day. TheoChat's design:
