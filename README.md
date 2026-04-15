@@ -103,7 +103,7 @@ theo_chat/
 |---|---|---|
 | `GOOGLE_API_KEY` | ✓ | YouTube Data API key (supports `YOUTUBE_API_KEY` as alias) |
 | `YOUTUBE_CHANNEL_ID` | ✓ | Target channel ID (starts with `UC...`) |
-| `PUBLIC_URL` | ✓ | Service's public URL (e.g. `https://theochat-production.up.railway.app`) — required for PubSub webhook registration |
+| `PUBLIC_URL` | optional | Service's public URL. Auto-derived from Railway's built-in `RAILWAY_PUBLIC_DOMAIN` if not set. Only set manually for non-Railway deploys. |
 | `WS_TOKEN` | optional | Shared secret for WebSocket auth |
 | `YOUTUBE_VIDEO_ID` | optional | Override for testing — points service at a specific video instead of discovering from channel |
 | `PORT` | auto | Set by Railway |

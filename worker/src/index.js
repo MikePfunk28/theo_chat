@@ -4,6 +4,10 @@
 // Railway service WebSocket URL. Update here + redeploy if the service moves.
 const WS_URL = 'wss://theochat-production.up.railway.app';
 
+// GitHub Release URL for the signed .xpi — always points at the latest tagged release.
+// When you publish a new release with the .xpi attached, the download updates automatically.
+const DOWNLOAD_URL = 'https://github.com/MikePfunk28/theo_chat/releases/latest/download/theochat.xpi';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -32,6 +36,11 @@ export default {
     // ── Pages ─────────────────────────────────────────────────
     if (url.pathname === '/privacy') {
       return html(privacyPage());
+    }
+
+    // One-click install — redirects to GitHub Release's signed .xpi
+    if (url.pathname === '/download') {
+      return Response.redirect(DOWNLOAD_URL, 302);
     }
 
     // Landing (default)
