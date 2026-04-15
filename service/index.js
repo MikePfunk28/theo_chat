@@ -11,6 +11,10 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
+// How often to self-heal by checking YouTube's public /live HTML page (free, no quota).
+// PubSub is unreliable for go-live events; this fallback catches what it misses.
+const LIVE_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
 // Auto-derive public URL from Railway env vars if not explicitly set.
 // Railway exposes RAILWAY_PUBLIC_DOMAIN (hostname only) and RAILWAY_STATIC_URL.
 function derivePublicUrl() {
@@ -330,6 +334,13 @@ function processMessages(messages) {
     const author = msg.authorDetails || {};
     const type = snippet.type;
 
+    // Diagnostic: log every event type we see so we can build handlers
+    // for moderation actions YouTube may use besides the standard four.
+    // Remove this block after all types are handled.
+    if (type !== undefined && type !== MessageType.TEXT_MESSAGE_EVENT) {
+      console.log(`  [YT][DBG] msgId=${id} type=${type} snippetKeys=${Object.keys(snippet).join(',')}`);
+    }
+
     if (type === MessageType.TEXT_MESSAGE_EVENT) {
       const event = {
         type: 'yt.message.created',
@@ -366,11 +377,15 @@ function processMessages(messages) {
       console.log(`  [YT] SC ${event.superChatAmount} ${event.displayName}: ${event.text}`);
 
     } else if (type === MessageType.MESSAGE_DELETED_EVENT || type === MessageType.TOMBSTONE) {
-      const deletedId = (snippet.messageDeletedDetails || {}).deletedMessageId || '';
+      // Multiple possible shapes YouTube uses for the deleted-id reference
+      const details = snippet.messageDeletedDetails || {};
+      const deletedId = details.deletedMessageId || snippet.deletedMessageId || '';
       if (deletedId) {
         activeMessages.delete(deletedId);
         broadcast({ type: 'yt.message.deleted', messageId: deletedId });
         console.log(`  [YT] Deleted: ${deletedId}`);
+      } else {
+        console.log(`  [YT][WARN] delete/tombstone with no deletedMessageId — snippet: ${JSON.stringify(snippet).slice(0, 300)}`);
       }
 
     } else if (type === MessageType.USER_BANNED_EVENT) {
