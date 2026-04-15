@@ -11,10 +11,6 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
-// How often to self-heal by checking YouTube's public /live HTML page (free, no quota).
-// PubSub is unreliable for go-live events; this fallback catches what it misses.
-const LIVE_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-
 // Auto-derive public URL from Railway env vars if not explicitly set.
 // Railway exposes RAILWAY_PUBLIC_DOMAIN (hostname only) and RAILWAY_STATIC_URL.
 function derivePublicUrl() {
@@ -40,13 +36,24 @@ if (!CHANNEL_ID && !VIDEO_ID) {
 }
 
 // ─── Message type enum from protobuf ───────────────────────────
+// Reference: https://github.com/yt-livechat-grpc (and YouTube Data API v3)
 const MessageType = {
   TEXT_MESSAGE_EVENT: 1,
-  TOMBSTONE: 2,
-  MESSAGE_DELETED_EVENT: 8,
-  USER_BANNED_EVENT: 10,
-  SUPER_CHAT_EVENT: 15
+  TOMBSTONE: 2,                 // placeholder after deletion
+  NEW_SPONSOR_EVENT: 4,
+  MESSAGE_DELETED_EVENT: 8,     // mod clicked Remove
+  MESSAGE_RETRACTED_EVENT: 11,  // user deleted their own message
+  USER_BANNED_EVENT: 10,        // mod banned/hid user
+  CHAT_ENDED_EVENT: 12,
+  SPONSOR_ONLY_MODE_STARTED_EVENT: 13,
+  SPONSOR_ONLY_MODE_ENDED_EVENT: 14,
+  SUPER_CHAT_EVENT: 15,
+  SUPER_STICKER_EVENT: 16,
+  MEMBERSHIP_GIFTING_EVENT: 17,
+  GIFT_MEMBERSHIP_RECEIVED_EVENT: 18
 };
+
+const TYPE_NAMES = Object.fromEntries(Object.entries(MessageType).map(([k, v]) => [v, k]));
 
 // ─── State ─────────────────────────────────────────────────────
 let liveChatId = null;
@@ -56,6 +63,57 @@ const processedIds = new Set();
 const activeMessages = new Map(); // messageId -> { userId, displayName }
 let running = true;
 let isStreaming = false; // true while connected to an active gRPC stream
+
+// ─── Metrics & safety ──────────────────────────────────────────
+const QUOTA_DAILY_BUDGET = parseInt(process.env.QUOTA_DAILY_BUDGET || '9000', 10); // cap at 90% of 10K default
+const QUOTA_RECONCILE_CEILING = parseInt(process.env.QUOTA_RECONCILE_CEILING || '7500', 10); // stop reconcile at this point
+const MAX_WS_PER_IP = parseInt(process.env.MAX_WS_PER_IP || '5', 10);
+
+const metrics = {
+  startedAt: Date.now(),
+  quotaUsedToday: 0,
+  quotaResetAt: nextMidnightPT(),
+  messagesRelayed: 0,
+  messagesDeleted: 0,
+  reconcileRuns: 0,
+  reconcileSkippedQuota: 0,
+  apiErrors: 0,
+  lastApiError: null,
+  wsConnectsLifetime: 0,
+  wsRejectedForIp: 0,
+  wsRejectedForToken: 0,
+  pubsubNotifications: 0,
+};
+const connByIp = new Map();
+
+function nextMidnightPT() {
+  // PT is UTC-8 or UTC-7 depending on DST; use a simple UTC boundary offset
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 8, 0, 0)); // 00:00 PT ≈ 08:00 UTC
+  return d.getTime();
+}
+
+// Quota reset timer
+setInterval(() => {
+  if (Date.now() >= metrics.quotaResetAt) {
+    console.log(`  [Metrics] Midnight PT reached — resetting quota counter (was ${metrics.quotaUsedToday})`);
+    metrics.quotaUsedToday = 0;
+    metrics.quotaResetAt = nextMidnightPT();
+  }
+}, 60 * 1000);
+
+function recordApiCall(cost, label) {
+  metrics.quotaUsedToday += cost;
+  if (metrics.quotaUsedToday % 500 < cost) {
+    console.log(`  [Quota] ${label}: +${cost} (today=${metrics.quotaUsedToday}/${QUOTA_DAILY_BUDGET})`);
+  }
+}
+
+function recordApiError(err, label) {
+  metrics.apiErrors++;
+  metrics.lastApiError = { at: Date.now(), label, message: err.message || String(err) };
+  console.error(`  [API] ${label} error: ${err.message || err}`);
+}
 
 // ─── YouTube REST API client (for stream discovery) ────────────
 const youtube = google.youtube({ version: 'v3', auth: API_KEY });
@@ -77,7 +135,32 @@ const server = http.createServer((req, res) => {
       liveChatId,
       videoId,
       streaming: isStreaming,
+      quota: {
+        usedToday: metrics.quotaUsedToday,
+        dailyBudget: QUOTA_DAILY_BUDGET,
+        resetAt: metrics.quotaResetAt,
+      },
+      uptime: Date.now() - metrics.startedAt,
+      messagesRelayed: metrics.messagesRelayed,
+      messagesDeleted: metrics.messagesDeleted,
     }));
+  } else if (parsedUrl === '/metrics') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ...metrics,
+      clientsCurrent: clientCount,
+      streaming: isStreaming,
+      videoId,
+      liveChatId,
+      uniqueIpsConnected: connByIp.size,
+      config: {
+        QUOTA_DAILY_BUDGET,
+        QUOTA_RECONCILE_CEILING,
+        MAX_WS_PER_IP,
+        RECONCILE_INTERVAL_MS,
+        MESSAGE_AGE_GRACE_MS,
+      },
+    }, null, 2));
   } else if (parsedUrl === '/overlay') {
     try {
       const html = fs.readFileSync(overlayPath, 'utf8');
@@ -135,21 +218,41 @@ wss.on('connection', (ws, req) => {
     const reqUrl = new URL(req.url, `http://${req.headers.host}`);
     const token = reqUrl.searchParams.get('token');
     if (token !== WS_TOKEN) {
+      metrics.wsRejectedForToken++;
       ws.close(4001, 'Unauthorized');
       return;
     }
   }
 
+  // Per-IP connection cap — prevents runaway bot floods
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  const current = connByIp.get(ip) || 0;
+  if (current >= MAX_WS_PER_IP) {
+    metrics.wsRejectedForIp++;
+    console.log(`  [WS] Rejected ${ip} — already at ${current} connections`);
+    ws.close(4008, 'Too many connections from IP');
+    return;
+  }
+  connByIp.set(ip, current + 1);
+
   clientCount++;
-  console.log(`  [WS] Client connected (${clientCount} total)`);
+  metrics.wsConnectsLifetime++;
+  console.log(`  [WS] Client connected from ${ip} (${clientCount} total)`);
   ws.send(JSON.stringify({ type: 'system.connected', text: 'TheoChat connected' }));
+
   ws.on('close', () => {
     clientCount--;
-    console.log(`  [WS] Client disconnected (${clientCount} total)`);
+    const n = (connByIp.get(ip) || 1) - 1;
+    if (n <= 0) connByIp.delete(ip); else connByIp.set(ip, n);
+    console.log(`  [WS] Client disconnected from ${ip} (${clientCount} total)`);
   });
 });
 
 function broadcast(event) {
+  // Metrics
+  if (event.type === 'yt.message.created') metrics.messagesRelayed++;
+  else if (event.type === 'yt.message.deleted') metrics.messagesDeleted++;
+
   const data = JSON.stringify(event);
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
@@ -169,6 +272,7 @@ server.listen(PORT, () => {
 
 // ─── Check live status + get liveChatId (1 quota unit) ─────────
 async function checkIfLive(targetVideoId) {
+  recordApiCall(1, 'videos.list');
   const videoResponse = await youtube.videos.list({
     id: [targetVideoId],
     part: ['liveStreamingDetails', 'snippet'],
@@ -202,6 +306,7 @@ async function startupDiscovery() {
 
   console.log(`  [YT] Startup check on channel ${CHANNEL_ID}...`);
   try {
+    recordApiCall(100, 'search.list(startup)');
     const response = await youtube.search.list({
       channelId: CHANNEL_ID,
       eventType: 'live',
@@ -295,15 +400,27 @@ async function connectGrpcStream() {
 // Quota cost: 5 units per call. 45s interval = ~9,600 units/day when
 // streaming continuously. Since Theo streams a few hours/day, real cost
 // is a fraction of the daily 10K budget.
-const RECONCILE_INTERVAL_MS = 45 * 1000;
+const RECONCILE_INTERVAL_MS = 90 * 1000; // 90s — safe for 24/7 streaming (4.8K quota/day)
 const MESSAGE_AGE_GRACE_MS = 10 * 60 * 1000; // only reconcile messages <10 min old
 const messageTimestamps = new Map(); // messageId -> ts we broadcast it
 
 async function reconcileMessages() {
   if (!liveChatId || !isStreaming) return;
+
+  // Quota budget enforcement — skip reconcile when approaching ceiling
+  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
+    metrics.reconcileSkippedQuota++;
+    if (metrics.reconcileSkippedQuota % 10 === 1) {
+      console.warn(`  [RECONCILE] Skipped — quota ${metrics.quotaUsedToday}/${QUOTA_DAILY_BUDGET} (ceiling ${QUOTA_RECONCILE_CEILING})`);
+    }
+    return;
+  }
+
   const cutoff = Date.now() - MESSAGE_AGE_GRACE_MS;
+  metrics.reconcileRuns++;
 
   try {
+    recordApiCall(5, 'liveChatMessages.list');
     const res = await youtube.liveChatMessages.list({
       liveChatId,
       part: ['id'],
@@ -327,10 +444,46 @@ async function reconcileMessages() {
       console.log(`  [RECONCILE] Swept ${removed} orphaned messages`);
     }
   } catch (err) {
-    console.error(`  [RECONCILE] Error: ${err.message}`);
+    recordApiError(err, 'reconcile');
   }
 }
 setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
+
+// ─── Auto-heal live detection — catches PubSub misses (FREE, no quota) ─
+// Scrapes YouTube's public /live HTML every 5 min when idle.
+// If Theo is live but PubSub never fired, we notice and connect within 5 min.
+const LIVE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+async function autoHealLiveCheck() {
+  if (!CHANNEL_ID) return;
+  if (isStreaming) return; // already good
+
+  try {
+    const res = await fetch(`https://www.youtube.com/channel/${CHANNEL_ID}/live`, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 TheoChatAutoheal/1.0' },
+    });
+    if (!res.ok) return;
+    const html = await res.text();
+
+    // Look for the video currently attached to the /live endpoint
+    const videoMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    const liveMatch = html.match(/"isLiveContent":(true|false)/);
+    const isLiveNow = html.match(/"isLive":(true|false)/);
+
+    if (!videoMatch) return;
+    const candidateId = videoMatch[1];
+    const looksLive = (liveMatch && liveMatch[1] === 'true') || (isLiveNow && isLiveNow[1] === 'true');
+    if (!looksLive) return;
+
+    console.log(`  [AutoHeal] Detected live stream via HTML fallback: ${candidateId}`);
+    await handleLiveCandidate(candidateId);
+  } catch (err) {
+    // Non-fatal — next tick will try again
+    console.error(`  [AutoHeal] Check failed (non-fatal): ${err.message}`);
+  }
+}
+setInterval(autoHealLiveCheck, LIVE_CHECK_INTERVAL_MS);
 
 // ─── PubSub subscription ───────────────────────────────────────
 async function subscribeToPubSub() {
@@ -381,10 +534,10 @@ function processMessages(messages) {
     const type = snippet.type;
 
     // Diagnostic: log every event type we see so we can build handlers
-    // for moderation actions YouTube may use besides the standard four.
-    // Remove this block after all types are handled.
+    // for any moderation actions YouTube might emit with unknown type codes.
     if (type !== undefined && type !== MessageType.TEXT_MESSAGE_EVENT) {
-      console.log(`  [YT][DBG] msgId=${id} type=${type} snippetKeys=${Object.keys(snippet).join(',')}`);
+      const typeName = TYPE_NAMES[type] || `UNKNOWN(${type})`;
+      console.log(`  [YT][DBG] msgId=${id} type=${typeName} snippetKeys=${Object.keys(snippet).join(',')}`);
     }
 
     if (type === MessageType.TEXT_MESSAGE_EVENT) {
@@ -424,16 +577,28 @@ function processMessages(messages) {
       broadcast(event);
       console.log(`  [YT] SC ${event.superChatAmount} ${event.displayName}: ${event.text}`);
 
-    } else if (type === MessageType.MESSAGE_DELETED_EVENT || type === MessageType.TOMBSTONE) {
-      // Multiple possible shapes YouTube uses for the deleted-id reference
-      const details = snippet.messageDeletedDetails || {};
-      const deletedId = details.deletedMessageId || snippet.deletedMessageId || '';
+    } else if (
+      type === MessageType.MESSAGE_DELETED_EVENT ||
+      type === MessageType.MESSAGE_RETRACTED_EVENT ||
+      type === MessageType.TOMBSTONE
+    ) {
+      // YouTube uses several field names depending on event variant — try all.
+      const details = snippet.messageDeletedDetails || snippet.messageRetractedDetails || {};
+      const deletedId =
+        details.deletedMessageId ||
+        details.retractedMessageId ||
+        snippet.deletedMessageId ||
+        snippet.retractedMessageId ||
+        '';
+
+      const hadIt = activeMessages.has(deletedId);
       if (deletedId) {
         activeMessages.delete(deletedId);
+        messageTimestamps.delete(deletedId);
         broadcast({ type: 'yt.message.deleted', messageId: deletedId });
-        console.log(`  [YT] Deleted: ${deletedId}`);
+        console.log(`  [YT] Deleted via ${TYPE_NAMES[type]}: ${deletedId} (we had it: ${hadIt})`);
       } else {
-        console.log(`  [YT][WARN] delete/tombstone with no deletedMessageId — snippet: ${JSON.stringify(snippet).slice(0, 300)}`);
+        console.log(`  [YT][WARN] ${TYPE_NAMES[type]} had no id — full snippet: ${JSON.stringify(snippet).slice(0, 500)}`);
       }
 
     } else if (type === MessageType.USER_BANNED_EVENT) {
