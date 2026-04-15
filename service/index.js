@@ -154,6 +154,11 @@ function broadcast(event) {
   }
 }
 
+// Heartbeat ping every 30s so extensions can detect stale connections
+setInterval(() => {
+  broadcast({ type: 'system.heartbeat', at: Date.now() });
+}, 30000);
+
 server.listen(PORT, () => {
   console.log(`  [HTTP] Health check + WebSocket on port ${PORT}`);
 });

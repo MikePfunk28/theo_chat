@@ -55,7 +55,10 @@ Every surface shares the same Impeccable-aligned visual system:
 - **Opt-in mod buffer** — slider in popup lets Theo hold messages 0–30s so mods can delete on YouTube before viewers ever see them; deleted-while-buffered messages never render
 - **Instant mod sync** — deletions and bans from YouTube mods reflect in the Twitch view immediately
 - **Super chats, member badges, owner badges** pass through with proper styling
-- **Auto-reconnect** on both the gRPC and WebSocket layers
+- **Auto-reconnect** with exponential backoff (3s → 6s → 12s → 24s → max 30s) on both the gRPC and WebSocket layers
+- **Heartbeat watchdog** — service pings every 30s; extension force-reconnects if no heartbeat for 90s (detects stuck connections)
+- **Defensive error isolation** — all event handlers wrapped in `try/catch` so a malformed message or DOM glitch never affects native Twitch chat
+- **Visible errors + manual reconnect** — last error surfaces in the popup with a RECONNECT button for recovery without reloading the tab
 - **PubSub auto-renewal** every 4 days (subscription lease is 5 days)
 - **Zero-config extension** — fetches WS URL from `t3yt.mikepfunk.com/api/config` at startup; Theo never types a URL
 

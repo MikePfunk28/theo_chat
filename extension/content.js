@@ -16,10 +16,21 @@
   let DELAY_MS = 0;         // mod buffer: hold messages N ms before injecting
   let messagesToday = 0;    // counter for popup stats
   let lastMessageAt = null; // timestamp for popup stats
+  let lastError = null;     // { message, at } — visible in popup
+  let lastHeartbeat = null; // last time we got anything from the service
 
   // ─── Pending message queue (for delay buffer) ─────────────────
   // Each entry: { event, timerId, injectAt }
   const pendingQueue = new Map(); // messageId -> entry
+
+  // ─── Defensive: catch-all so nothing we do can break Twitch chat ─
+  function safe(fn, label) {
+    try { return fn(); }
+    catch (err) {
+      console.error(`[TheoChat] ${label} failed:`, err);
+      lastError = { message: `${label}: ${err.message || 'unknown'}`, at: Date.now() };
+    }
+  }
 
   // Twitch chat selectors — if Twitch changes their DOM, update these
   const SELECTORS = {
@@ -127,35 +138,62 @@
     };
 
     ws.onmessage = (event) => {
+      lastHeartbeat = Date.now(); // any message counts as life
       try {
         const data = JSON.parse(event.data);
-        handleEvent(data);
+        safe(() => handleEvent(data), 'handleEvent');
       } catch (err) {
         console.error('[TheoChat] Failed to parse message:', err);
+        lastError = { message: `parse: ${err.message || 'invalid JSON'}`, at: Date.now() };
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       isConnected = false;
-      console.log('[TheoChat] Disconnected from service');
+      console.log(`[TheoChat] Disconnected (code ${e.code})`);
+      if (e.code !== 1000 && e.code !== 1001) {
+        lastError = { message: `ws closed: ${e.code}${e.reason ? ' ' + e.reason : ''}`, at: Date.now() };
+      }
       scheduleReconnect();
     };
 
-    ws.onerror = (err) => {
+    ws.onerror = () => {
       console.error('[TheoChat] WebSocket error');
-      ws.close();
+      lastError = { message: 'ws error (check service)', at: Date.now() };
+      if (ws) ws.close();
     };
   }
 
+  let reconnectAttempts = 0;
   function scheduleReconnect() {
     if (reconnectTimer) return;
+    // Exponential backoff: 3s, 6s, 12s, 24s, max 30s
+    const delay = Math.min(RECONNECT_DELAY * Math.pow(2, reconnectAttempts), 30000);
+    reconnectAttempts++;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!isConnected) {
         connectWebSocket();
       }
-    }, RECONNECT_DELAY);
+    }, delay);
   }
+
+  function forceReconnect() {
+    reconnectAttempts = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (ws) { try { ws.close(); } catch {} }
+    ws = null;
+    connectWebSocket();
+  }
+
+  // Heartbeat watchdog: if nothing from service for 90s, assume stale and reconnect
+  setInterval(() => {
+    if (isConnected && lastHeartbeat && Date.now() - lastHeartbeat > 90000) {
+      console.warn('[TheoChat] No heartbeat for 90s — forcing reconnect');
+      lastError = { message: 'stale connection, reconnecting', at: Date.now() };
+      forceReconnect();
+    }
+  }, 30000);
 
   // ─── Event Handling ──────────────────────────────────────────
 
@@ -420,8 +458,18 @@
           messagesToday,
           lastMessageAt,
           wsUrl: WS_URL,
+          lastError,
+          lastHeartbeat,
+          readyState: ws ? ws.readyState : -1,
         });
-        return true; // async response
+        return true;
+      } else if (msg.type === 'theochat.reconnect') {
+        forceReconnect();
+        sendResponse({ ok: true });
+      } else if (msg.type === 'theochat.flushQueue') {
+        for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
+        pendingQueue.clear();
+        sendResponse({ ok: true });
       }
     });
   } else {

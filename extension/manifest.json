@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TheoChat — YouTube in Twitch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Injects YouTube live chat messages into Twitch chat for a unified view.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["*://*.up.railway.app/*", "https://t3yt.mikepfunk.com/*"],

@@ -22,6 +22,9 @@ const els = {
   openOptions:document.getElementById('openOptions'),
   version:    document.getElementById('version'),
   endpoint:   document.getElementById('endpoint'),
+  alert:      document.getElementById('alert'),
+  alertText:  document.getElementById('alertText'),
+  reconnect:  document.getElementById('reconnectBtn'),
 };
 
 let state = {
@@ -34,6 +37,8 @@ let state = {
   wsUrl: '',
   svcOk: false,
   ytLive: false,
+  lastError: null,
+  lastHeartbeat: null,
 };
 
 let healthTimer = null;
@@ -52,6 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   els.toggle.addEventListener('click', onToggle);
   els.delaySlider.addEventListener('input', onDelayInput);
   els.openOptions.addEventListener('click', onOpenOptions);
+  els.reconnect.addEventListener('click', onReconnect);
 
   pollHealth();
   healthTimer = setInterval(pollHealth, HEALTH_POLL_MS);
@@ -107,6 +113,23 @@ function render() {
   els.statLast.textContent = formatRelative(state.lastMessageAt);
 
   els.endpoint.textContent = state.wsUrl || 'not configured';
+
+  // Alert logic — only show when something's actionable
+  const showAlert = state.enabled && (!state.connected || state.lastError);
+  els.alert.hidden = !showAlert;
+  if (showAlert) {
+    if (state.lastError && Date.now() - (state.lastError.at || 0) < 120000) {
+      // Recent error (<2 min old)
+      els.alert.dataset.state = 'err';
+      els.alertText.textContent = state.lastError.message;
+    } else if (!state.connected) {
+      els.alert.dataset.state = 'idle';
+      els.alertText.textContent = 'Disconnected from service';
+    } else {
+      els.alert.dataset.state = 'ok';
+      els.alertText.textContent = 'All systems nominal';
+    }
+  }
 }
 
 // ─── Event handlers ──────────────────────────────────────────────
@@ -129,6 +152,26 @@ async function onDelayInput(e) {
 function onOpenOptions(e) {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
+}
+
+async function onReconnect() {
+  els.reconnect.textContent = 'RECONNECTING';
+  els.reconnect.disabled = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.url && tab.url.includes('twitch.tv')) {
+      await chrome.tabs.sendMessage(tab.id, { type: 'theochat.reconnect' });
+    }
+    // Clear last error optimistically
+    state.lastError = null;
+    setTimeout(queryActiveTabStatus, 500);
+  } catch {
+    /* ignore */
+  }
+  setTimeout(() => {
+    els.reconnect.textContent = 'RECONNECT';
+    els.reconnect.disabled = false;
+  }, 1200);
 }
 
 // ─── Data fetchers ───────────────────────────────────────────────
@@ -171,6 +214,8 @@ async function queryActiveTabStatus() {
       state.pending = reply.pending ?? 0;
       state.messagesToday = reply.messagesToday ?? 0;
       state.lastMessageAt = reply.lastMessageAt ?? null;
+      state.lastError = reply.lastError ?? null;
+      state.lastHeartbeat = reply.lastHeartbeat ?? null;
     }
     render();
   } catch {
