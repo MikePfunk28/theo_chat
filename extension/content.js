@@ -227,44 +227,62 @@
     el.setAttribute('data-theochat-msg-id', event.messageId);
     el.setAttribute('data-theochat-user-id', event.userId);
 
-    // Build the message HTML
-    let html = '';
+    // Build message via DOM methods (AMO-safe — no innerHTML)
+    const mkBadge = (text, className, title) => {
+      const span = document.createElement('span');
+      span.className = className;
+      if (title) span.title = title;
+      span.textContent = text;
+      return span;
+    };
 
     // YouTube badge
-    html += '<span class="theochat-badge" title="YouTube">YT</span>';
+    el.appendChild(mkBadge('YT', 'theochat-badge', 'YouTube'));
 
     // Role badges
     for (const badge of event.badges) {
       if (badge === 'owner') {
-        html += '<span class="theochat-badge theochat-badge-owner" title="Channel Owner">Owner</span>';
+        el.appendChild(mkBadge('Owner', 'theochat-badge theochat-badge-owner', 'Channel Owner'));
       } else if (badge === 'moderator') {
-        html += '<span class="theochat-badge theochat-badge-moderator" title="Moderator">Mod</span>';
+        el.appendChild(mkBadge('Mod', 'theochat-badge theochat-badge-moderator', 'Moderator'));
       } else if (badge === 'member') {
-        html += '<span class="theochat-badge theochat-badge-member" title="Member">Member</span>';
+        el.appendChild(mkBadge('Member', 'theochat-badge theochat-badge-member', 'Member'));
       }
     }
 
     // Super chat badge
     if (event.isSuperChat && event.superChatAmount) {
-      html += `<span class="theochat-badge theochat-badge-superchat" title="Super Chat">${escapeHtml(event.superChatAmount)}</span>`;
+      el.appendChild(mkBadge(event.superChatAmount, 'theochat-badge theochat-badge-superchat', 'Super Chat'));
     }
 
     // Avatar
     if (event.profileImageUrl) {
-      html += `<img class="theochat-avatar" src="${escapeHtml(event.profileImageUrl)}" alt="" loading="lazy">`;
+      const img = document.createElement('img');
+      img.className = 'theochat-avatar';
+      img.src = event.profileImageUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      el.appendChild(img);
     }
 
-    // Author name (colored by platform)
-    const nameColor = getNameColor(event.displayName);
-    html += `<span class="theochat-author" style="color: ${nameColor}">${escapeHtml(event.displayName)}</span>`;
+    // Author name (colored)
+    const author = document.createElement('span');
+    author.className = 'theochat-author';
+    author.style.color = getNameColor(event.displayName);
+    author.textContent = event.displayName;
+    el.appendChild(author);
 
     // Separator
-    html += '<span>: </span>';
+    const sep = document.createElement('span');
+    sep.textContent = ': ';
+    el.appendChild(sep);
 
     // Message text
-    html += `<span class="theochat-text">${escapeHtml(event.text)}</span>`;
+    const body = document.createElement('span');
+    body.className = 'theochat-text';
+    body.textContent = event.text;
+    el.appendChild(body);
 
-    el.innerHTML = html;
     chatContainer.appendChild(el);
 
     // Scroll to bottom if the user hasn't scrolled up
@@ -313,12 +331,6 @@
   }
 
   // ─── Utilities ───────────────────────────────────────────────
-
-  function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
 
   // Generate a consistent color for a username (similar to Twitch's approach)
   function getNameColor(name) {
