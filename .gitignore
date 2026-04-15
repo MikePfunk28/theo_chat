@@ -1,18 +1,27 @@
 node_modules/
+dist/
+.venv/
+.claude/
+
+# Secrets
 config.json
 .tokens.json
 oauth.json
-*.env
-.env.*
-.venv/
-.claude/
 api.json
 railway.json
+*.env
+.env.*
+
+# Build artifacts / local caches
 .wrangler/
 wrangler-account.json
-dist/
+.playwright-mcp/
 *.log
-extension.rar
-extension.zip
-theochat-extension.zip
-.playwright-mcp/page-2026-04-15T06-30-45-727Z.yml
+
+# Extension build artifacts (committed source lives in extension/)
+*.xpi
+*.zip
+*.rar
+
+# Screenshots at repo root (extension/icon*.png still tracked)
+/*.png
