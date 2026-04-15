@@ -133,8 +133,9 @@
 
     ws.onopen = () => {
       isConnected = true;
+      reconnectAttempts = 0; // reset backoff on successful connect
       console.log('[TheoChat] Connected to TheoChat service');
-      injectSystemMessage('TheoChat connected — YouTube chat will appear here');
+      // Status is visible in the popup's signal LEDs — don't pollute Twitch chat
     };
 
     ws.onmessage = (event) => {
@@ -229,10 +230,10 @@
         break;
 
       case 'yt.chat.ended':
-        // Flush the queue so nothing gets injected after chat is gone
+        // Flush the queue so nothing gets injected after chat is gone.
+        // Status reflected in popup signal LEDs — no notification in Twitch chat.
         for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
         pendingQueue.clear();
-        injectSystemMessage('YouTube live chat ended');
         break;
 
       case 'system.connected':
@@ -356,16 +357,6 @@
         el.remove();
       }
     }
-  }
-
-  function injectSystemMessage(text) {
-    if (!chatContainer) return;
-
-    const el = document.createElement('div');
-    el.className = 'theochat-system';
-    el.textContent = text;
-    chatContainer.appendChild(el);
-    scrollToBottom();
   }
 
   // ─── Utilities ───────────────────────────────────────────────
