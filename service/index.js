@@ -286,6 +286,52 @@ async function connectGrpcStream() {
   }
 }
 
+// ─── Reconciliation poll — safety net for missed mod actions ──
+// Every 45s while streaming, call liveChatMessages.list and compare with
+// our activeMessages map. Anything we broadcast that is no longer in the
+// live chat response was moderated — broadcast a delete. This catches
+// any moderation action regardless of whether it fired a gRPC event.
+//
+// Quota cost: 5 units per call. 45s interval = ~9,600 units/day when
+// streaming continuously. Since Theo streams a few hours/day, real cost
+// is a fraction of the daily 10K budget.
+const RECONCILE_INTERVAL_MS = 45 * 1000;
+const MESSAGE_AGE_GRACE_MS = 10 * 60 * 1000; // only reconcile messages <10 min old
+const messageTimestamps = new Map(); // messageId -> ts we broadcast it
+
+async function reconcileMessages() {
+  if (!liveChatId || !isStreaming) return;
+  const cutoff = Date.now() - MESSAGE_AGE_GRACE_MS;
+
+  try {
+    const res = await youtube.liveChatMessages.list({
+      liveChatId,
+      part: ['id'],
+      maxResults: 2000,
+    });
+    const livePresent = new Set((res.data.items || []).map((m) => m.id));
+
+    let removed = 0;
+    for (const [msgId, info] of activeMessages) {
+      const ts = messageTimestamps.get(msgId) || 0;
+      if (ts < cutoff) continue; // too old to verify; don't touch
+      if (!livePresent.has(msgId)) {
+        console.log(`  [RECONCILE] Removing ${msgId} (${info.displayName}) — no longer in YouTube chat`);
+        activeMessages.delete(msgId);
+        messageTimestamps.delete(msgId);
+        broadcast({ type: 'yt.message.deleted', messageId: msgId });
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      console.log(`  [RECONCILE] Swept ${removed} orphaned messages`);
+    }
+  } catch (err) {
+    console.error(`  [RECONCILE] Error: ${err.message}`);
+  }
+}
+setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
+
 // ─── PubSub subscription ───────────────────────────────────────
 async function subscribeToPubSub() {
   if (!CHANNEL_ID) {
@@ -355,6 +401,7 @@ function processMessages(messages) {
         superChatAmount: null
       };
       activeMessages.set(id, { userId: event.userId, displayName: event.displayName });
+      messageTimestamps.set(id, Date.now());
       broadcast(event);
       console.log(`  [YT] ${event.displayName}: ${event.text}`);
 
@@ -373,6 +420,7 @@ function processMessages(messages) {
         superChatAmount: sc.amountDisplayString || null
       };
       activeMessages.set(id, { userId: event.userId, displayName: event.displayName });
+      messageTimestamps.set(id, Date.now());
       broadcast(event);
       console.log(`  [YT] SC ${event.superChatAmount} ${event.displayName}: ${event.text}`);
 
