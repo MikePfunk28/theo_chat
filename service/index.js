@@ -511,9 +511,22 @@ async function reconcileMessages() {
 setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
 
 // ─── Auto-heal live detection — catches PubSub misses (FREE, no quota) ─
-// Scrapes YouTube's public /live HTML every 5 min when idle.
-// If Theo is live but PubSub never fired, we notice and connect within 5 min.
-const LIVE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+// Exponential backoff: checks frequently after a stream ends (5 min),
+// slows down over time if nothing found (up to 60 min max).
+// Resets to fast-check when a stream is detected or ends.
+// Prevents hammering YouTube 24/7 when Theo isn't streaming.
+const AUTOHEAL_MIN_MS = 5 * 60 * 1000;   // 5 min right after stream ends
+const AUTOHEAL_MAX_MS = 60 * 60 * 1000;  // 60 min during long inactivity
+let autoHealInterval = AUTOHEAL_MIN_MS;
+let autoHealTimer = null;
+
+function scheduleAutoHeal() {
+  if (autoHealTimer) clearTimeout(autoHealTimer);
+  autoHealTimer = setTimeout(async () => {
+    await autoHealLiveCheck();
+    scheduleAutoHeal();
+  }, autoHealInterval);
+}
 
 // ─── Emoji library scraper ─────────────────────────────────────
 // YouTube's v3 Data API doesn't expose custom emoji image URLs, but the
@@ -565,34 +578,45 @@ async function fetchEmojiLibrary(vid) {
 
 async function autoHealLiveCheck() {
   if (!CHANNEL_ID) return;
-  if (isStreaming) return; // already good
+  if (isStreaming) {
+    // Already connected — reset to fast check for when stream ends
+    autoHealInterval = AUTOHEAL_MIN_MS;
+    return;
+  }
 
   try {
     const res = await fetch(`https://www.youtube.com/channel/${CHANNEL_ID}/live`, {
       redirect: 'follow',
       headers: { 'User-Agent': 'Mozilla/5.0 TheoChatAutoheal/1.0' },
     });
-    if (!res.ok) return;
+    if (!res.ok) { autoHealBackOff(); return; }
     const html = await res.text();
 
-    // Look for the video currently attached to the /live endpoint
     const videoMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
     const liveMatch = html.match(/"isLiveContent":(true|false)/);
     const isLiveNow = html.match(/"isLive":(true|false)/);
 
-    if (!videoMatch) return;
+    if (!videoMatch) { autoHealBackOff(); return; }
     const candidateId = videoMatch[1];
     const looksLive = (liveMatch && liveMatch[1] === 'true') || (isLiveNow && isLiveNow[1] === 'true');
-    if (!looksLive) return;
 
-    console.log(`  [AutoHeal] Detected live stream via HTML fallback: ${candidateId}`);
+    if (!looksLive) { autoHealBackOff(); return; }
+
+    console.log(`  [AutoHeal] Detected live via HTML (interval was ${Math.round(autoHealInterval / 60000)}min): ${candidateId}`);
+    autoHealInterval = AUTOHEAL_MIN_MS; // reset to fast on detection
     await handleLiveCandidate(candidateId);
   } catch (err) {
-    // Non-fatal — next tick will try again
     console.error(`  [AutoHeal] Check failed (non-fatal): ${err.message}`);
+    autoHealBackOff();
   }
 }
-setInterval(autoHealLiveCheck, LIVE_CHECK_INTERVAL_MS);
+
+function autoHealBackOff() {
+  autoHealInterval = Math.min(autoHealInterval * 2, AUTOHEAL_MAX_MS);
+}
+
+// Start the backoff timer
+scheduleAutoHeal();
 
 // ─── PubSub subscription ───────────────────────────────────────
 async function subscribeToPubSub() {
