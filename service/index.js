@@ -635,6 +635,8 @@ async function subscribeToPubSub() {
   }
   const topic = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${CHANNEL_ID}`;
   const callback = `${PUBLIC_URL.replace(/\/$/, '')}/webhook/youtube`;
+  console.log(`  [PubSub] PUBLIC_URL=${PUBLIC_URL}`);
+  console.log(`  [PubSub] callback=${callback}`);
   const body = new URLSearchParams({
     'hub.callback': callback,
     'hub.topic': topic,
