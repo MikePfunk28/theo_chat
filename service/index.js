@@ -710,7 +710,7 @@ async function connectGrpcStream() {
 // Quota cost: 5 units per call. 45s interval = ~9,600 units/day when
 // streaming continuously. Since Theo streams a few hours/day, real cost
 // is a fraction of the daily 10K budget.
-const RECONCILE_INTERVAL_MS = 30 * 1000; // 30s — bounded moderation lag while live
+const RECONCILE_INTERVAL_MS = 15 * 1000; // 15s — tighter moderation safety while still inside quota for normal streams
 const MESSAGE_AGE_GRACE_MS = 10 * 60 * 1000; // only reconcile messages <10 min old
 const messageTimestamps = new Map(); // messageId -> ts we broadcast it
 
@@ -756,6 +756,7 @@ async function reconcileMessages() {
       metrics.reconcileDeletes += removed;
       console.log(`  [RECONCILE] Swept ${removed} orphaned messages`);
     }
+    broadcast({ type: 'system.reconciled', at: Date.now() });
   } catch (err) {
     recordApiError(err, 'reconcile');
   }

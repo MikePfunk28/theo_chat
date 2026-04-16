@@ -2,6 +2,7 @@
 // Talks to the active Twitch tab's content script + the Railway service /health
 
 const HEALTH_POLL_MS = 4000; // popup-only tick — not server quota burn
+const DEFAULT_DELAY_MS = 30000;
 
 const els = {
   svcLed:     document.querySelector('[data-signal="service"] .signal__led'),
@@ -29,7 +30,7 @@ const els = {
 
 let state = {
   enabled: true,
-  delayMs: 0,
+  delayMs: DEFAULT_DELAY_MS,
   connected: false,
   pending: 0,
   messagesToday: 0,
@@ -49,14 +50,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.runtime.sendMessage({ type: 'theochat.popupOpen', value: true });
   els.version.textContent = `v${chrome.runtime.getManifest().version}`;
 
-  const stored = await chrome.storage.sync.get({ enabled: true, delayMs: 0, wsUrl: '' });
+  const stored = await chrome.storage.sync.get({ enabled: true, delayMs: DEFAULT_DELAY_MS, wsUrl: '' });
   state.enabled = stored.enabled;
   state.delayMs = stored.delayMs;
   state.wsUrl = stored.wsUrl;
   render();
 
   els.toggle.addEventListener('click', onToggle);
-  els.delaySlider.addEventListener('input', onDelayInput);
   els.openOptions.addEventListener('click', onOpenOptions);
   els.reconnect.addEventListener('click', onReconnect);
 
@@ -89,26 +89,20 @@ function render() {
     ? 'Injecting YouTube into Twitch chat'
     : 'YouTube messages are hidden';
 
-  els.delaySlider.value = String(Math.round(state.delayMs / 1000));
-  const seconds = Math.round(state.delayMs / 1000);
-  els.delayReadout.textContent = seconds === 0 ? '0s' : `${seconds}s`;
-  els.delaySlider.style.setProperty('--fill', `${(seconds / 30) * 100}%`);
+  const seconds = Math.round(DEFAULT_DELAY_MS / 1000);
+  els.delaySlider.value = String(seconds);
+  els.delayReadout.textContent = `${seconds}s`;
+  els.delaySlider.style.setProperty('--fill', '100%');
 
   // Build delay explanation with safe DOM methods (no innerHTML)
   els.delayExplain.textContent = '';
-  if (seconds === 0) {
-    els.delayExplain.appendChild(document.createTextNode(
-      'No delay — messages appear the instant YouTube sends them.'
-    ));
-  } else {
-    els.delayExplain.appendChild(document.createTextNode('Messages are held '));
-    const strong = document.createElement('strong');
-    strong.textContent = `${seconds}s`;
-    els.delayExplain.appendChild(strong);
-    els.delayExplain.appendChild(document.createTextNode(
-      ' before appearing. Mods get that window to delete on YouTube — deleted messages never show.'
-    ));
-  }
+  els.delayExplain.appendChild(document.createTextNode('Messages are held '));
+  const strong = document.createElement('strong');
+  strong.textContent = `${seconds}s`;
+  els.delayExplain.appendChild(strong);
+  els.delayExplain.appendChild(document.createTextNode(
+    ' before appearing, and only release after a moderation reconciliation pass. This safety window is locked on.'
+  ));
 
   els.statPending.textContent = String(state.pending);
   els.statCount.textContent = formatCount(state.messagesToday);
@@ -140,14 +134,6 @@ async function onToggle() {
   state.enabled = !state.enabled;
   await chrome.storage.sync.set({ enabled: state.enabled });
   sendToActiveTab({ type: 'theochat.setEnabled', value: state.enabled });
-  render();
-}
-
-async function onDelayInput(e) {
-  const seconds = parseInt(e.target.value, 10) || 0;
-  state.delayMs = seconds * 1000;
-  await chrome.storage.sync.set({ delayMs: state.delayMs });
-  sendToActiveTab({ type: 'theochat.setDelay', value: state.delayMs });
   render();
 }
 

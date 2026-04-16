@@ -21,17 +21,20 @@
 
   // ─── Configuration ────────────────────────────────────────────
   const DEFAULT_WS_URL = 'ws://localhost:9300';
+  const DEFAULT_DELAY_MS = 30000;
+  const MIN_SAFE_DELAY_MS = 30000;
   const RECONNECT_DELAY = 3000;
   let WS_URL = DEFAULT_WS_URL;
   let WS_TOKEN = '';
 
   // ─── Settings (synced with popup) ─────────────────────────────
   let ENABLED = true;       // master on/off
-  let DELAY_MS = 0;         // mod buffer: hold messages N ms before injecting
+  let DELAY_MS = DEFAULT_DELAY_MS; // mandatory mod buffer: hold messages until a reconcile pass has cleared them
   let messagesToday = 0;    // counter for popup stats
   let lastMessageAt = null; // timestamp for popup stats
   let lastError = null;     // { message, at } — visible in popup
   let lastHeartbeat = null; // last time we got anything from the service
+  let lastReconcileAt = 0;  // last successful moderation reconciliation timestamp from the service
 
   // ─── Pending message queue (for delay buffer) ─────────────────
   // Each entry: { event, timerId, injectAt }
@@ -266,6 +269,11 @@
 
       case 'system.heartbeat':
         break;
+
+      case 'system.reconciled':
+        lastReconcileAt = event.at || Date.now();
+        flushPendingQueue();
+        break;
     }
   }
 
@@ -285,14 +293,32 @@
       if (oldest) clearTimeout(oldest.timerId);
       pendingQueue.delete(oldestKey);
     }
-    // Hold for DELAY_MS — gives mods a window to delete before it ever appears
+    // Hold for DELAY_MS, then wait for the next reconcile pass before rendering.
     const timerId = setTimeout(() => {
-      pendingQueue.delete(event.messageId);
-      injectChatMessage(event);
+      const entry = pendingQueue.get(event.messageId);
+      if (!entry) return;
+      entry.ready = true;
+      flushPendingQueue();
+    }, DELAY_MS);
+    pendingQueue.set(event.messageId, {
+      event,
+      timerId,
+      injectAt: Date.now() + DELAY_MS,
+      ready: false,
+    });
+  }
+
+  function flushPendingQueue() {
+    if (!chatContainer) return;
+    for (const [messageId, entry] of pendingQueue) {
+      if (!entry.ready) continue;
+      if (lastReconcileAt < entry.injectAt) continue;
+      clearTimeout(entry.timerId);
+      pendingQueue.delete(messageId);
+      injectChatMessage(entry.event);
       messagesToday++;
       lastMessageAt = Date.now();
-    }, DELAY_MS);
-    pendingQueue.set(event.messageId, { event, timerId, injectAt: Date.now() + DELAY_MS });
+    }
   }
 
   // ─── DOM Injection ───────────────────────────────────────────
@@ -506,12 +532,12 @@
 
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
     chrome.storage.sync.get(
-      { wsUrl: DEFAULT_WS_URL, wsToken: '', enabled: true, delayMs: 0 },
+      { wsUrl: DEFAULT_WS_URL, wsToken: '', enabled: true, delayMs: DEFAULT_DELAY_MS },
       async (result) => {
         WS_URL = await resolveWsUrl(result.wsUrl);
         WS_TOKEN = result.wsToken || '';
         ENABLED = result.enabled !== false;
-        DELAY_MS = Math.max(0, parseInt(result.delayMs, 10) || 0);
+        DELAY_MS = Math.max(MIN_SAFE_DELAY_MS, parseInt(result.delayMs, 10) || DEFAULT_DELAY_MS);
         console.log(`[TheoChat] WS URL loaded: ${WS_URL} | enabled=${ENABLED} | delay=${DELAY_MS}ms`);
         if (isTargetChannelPage()) {
           waitForChatContainer();
@@ -534,7 +560,7 @@
           }
         }
       } else if (msg.type === 'theochat.setDelay') {
-        DELAY_MS = Math.max(0, parseInt(msg.value, 10) || 0);
+        DELAY_MS = Math.max(MIN_SAFE_DELAY_MS, parseInt(msg.value, 10) || DEFAULT_DELAY_MS);
       } else if (msg.type === 'theochat.getStatus') {
         sendResponse({
           enabled: ENABLED,

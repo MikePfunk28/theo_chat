@@ -1,6 +1,6 @@
 # TheoChat
 
-Merges Theo's YouTube live chat into Theo's Twitch chat view. YouTube messages appear inline in the native Twitch chat panel with a red `YT` badge. When YouTube mods delete a message or ban a user, those actions are mirrored into the Twitch view immediately, with a `30s` fallback reconciliation sweep while live.
+Merges Theo's YouTube live chat into Theo's Twitch chat view. YouTube messages appear inline in the native Twitch chat panel with a red `YT` badge. When YouTube mods delete a message or ban a user, those actions are mirrored into the Twitch view immediately, with a `15s` fallback reconciliation sweep while live.
 
 **Live site:** [t3yt.mikepfunk.com](https://t3yt.mikepfunk.com)
 
@@ -21,7 +21,7 @@ YouTube PubSub push ───► [Railway service] ──(videos.list, 1 quota)�
                          Twitch chat panel ─── YT messages + mod sync
 ```
 
-**Push-first, zero idle YouTube quota.** The Railway service subscribes once to YouTube's PubSubHubbub. YouTube pushes a notification the instant Theo goes live. If nobody is using the bridge yet, the service caches that candidate and waits. Once a client connects, it verifies the cached candidate or falls back to Twitch Helix + a single channel-scoped YouTube `search.list`. During an active stream, the service also runs a `30s` `liveChatMessages.list` reconciliation sweep for moderation safety. Offline YouTube quota remains `0`.
+**Push-first, zero idle YouTube quota.** The Railway service subscribes once to YouTube's PubSubHubbub. YouTube pushes a notification the instant Theo goes live. If nobody is using the bridge yet, the service caches that candidate and waits. Once a client connects, it verifies the cached candidate or falls back to Twitch Helix or a channel-scoped YouTube `search.list`. During an active stream, the service runs a `15s` `liveChatMessages.list` reconciliation sweep for moderation safety. Offline YouTube quota remains `0`.
 
 **Read-only mirror.** YouTube is the source of truth. We never write to YouTube, never touch Twitch's actual chat. We just paint YouTube messages into Theo's Twitch browser tab.
 
@@ -51,9 +51,8 @@ Every surface shares the same Impeccable-aligned visual system:
 
 ### Key features
 
-- **Zero-delay by default** — messages appear instant
-- **Opt-in mod buffer** — slider in popup lets Theo hold messages 0–30s so mods can delete on YouTube before viewers ever see them; deleted-while-buffered messages never render
-- **Two-layer mod sync** — deletions and bans reflect immediately when YouTube emits the event, with a `30s` fallback sweep for missed moderation events
+- **Mandatory moderation window** — messages are held for 30s and only release after a reconciliation pass; deleted messages inside that window never render
+- **Two-layer mod sync** — deletions and bans reflect immediately when YouTube emits the event, with a `15s` fallback sweep for missed moderation events
 - **Super chats, member badges, owner badges** pass through with proper styling
 - **Auto-reconnect** with exponential backoff (3s → 6s → 12s → 24s → max 30s) on both the gRPC and WebSocket layers
 - **Heartbeat watchdog** — service pings every 30s; extension force-reconnects if no heartbeat for 90s (detects stuck connections)
@@ -217,7 +216,7 @@ YouTube Data API has a default 10,000 units/day. TheoChat's design:
 | Idle (nothing happening) | **0 units** — PubSub is free and the service does not call YouTube while offline |
 | Stream starts (PubSub path) | **1 unit** (`videos.list`) |
 | Stream starts (Twitch fallback path) | **~101 units** (`search.list` + `videos.list`) |
-| Active session | **~600 units/hour** (`liveChatMessages.list` every 30s) |
+| Active session | **~1200 units/hour** (`liveChatMessages.list` every 15s) |
 
 Expected usage depends on stream length, but idle remains `0/day` and the fallback path only spends quota while Theo is actually live or being recovered.
 

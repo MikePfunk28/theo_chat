@@ -46,14 +46,14 @@
 
     <section class="delay">
       <header class="delay__head">
-        <h2 class="delay__title">MOD BUFFER</h2>
-        <output class="delay__readout" id="delayReadout">0s</output>
+        <h2 class="delay__title">MOD SAFETY WINDOW</h2>
+        <output class="delay__readout" id="delayReadout">30s</output>
       </header>
-      <input type="range" id="delaySlider" min="0" max="30" step="1" value="0" class="delay__slider" aria-label="Delay in seconds">
+      <input type="range" id="delaySlider" min="30" max="30" step="1" value="30" class="delay__slider" aria-label="Delay in seconds" disabled>
       <div class="delay__ticks" aria-hidden="true">
-        <span>0</span><span>5</span><span>10</span><span>15</span><span>20</span><span>25</span><span>30</span>
+        <span>locked</span><span>30s</span><span>moderation-safe</span>
       </div>
-      <p class="delay__explain" id="delayExplain">No delay — messages appear the instant YouTube sends them.</p>
+      <p class="delay__explain" id="delayExplain">Messages are held 30s before appearing, and only release after a moderation reconciliation pass. This safety window is locked on.</p>
     </section>
 
     <section class="telemetry">
