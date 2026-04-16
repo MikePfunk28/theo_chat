@@ -15,9 +15,24 @@
   </header>
 
   <section class="intro">
-    <p class="intro__tag">MANUAL OVERRIDE</p>
-    <h1 class="intro__title">This is auto-configured.</h1>
-    <p class="intro__body">The extension fetches its connection URL automatically from <a href="https://t3yt.mikepfunk.com/api/config" target="_blank" rel="noopener">t3yt.mikepfunk.com</a>. Only use the overrides below if the auto-fetch fails or you need to point at a different service instance for testing.</p>
+    <p class="intro__tag">LOCKED TARGET</p>
+    <h1 class="intro__title">Built for Theo only.</h1>
+    <p class="intro__body">The extension fetches its connection URL automatically from <a href="https://t3yt.mikepfunk.com/api/config" target="_blank" rel="noopener">t3yt.mikepfunk.com</a> and only injects on Theo's Twitch page. These overrides are for service routing and debugging only, not for changing the streamer identity.</p>
+  </section>
+
+  <section class="rail">
+    <div class="rail__cell">
+      <span class="rail__key">TWITCH TARGET</span>
+      <span class="rail__val">theo</span>
+    </div>
+    <div class="rail__cell">
+      <span class="rail__key">MODE</span>
+      <span class="rail__val">AUTO DETECT</span>
+    </div>
+    <div class="rail__cell">
+      <span class="rail__key">YOUTUBE</span>
+      <span class="rail__val">SERVER-LOCKED</span>
+    </div>
   </section>
 
   <section class="form">

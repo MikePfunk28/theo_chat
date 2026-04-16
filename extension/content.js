@@ -1,12 +1,12 @@
 // TheoChat — Content script for Twitch
 // Connects to the TheoChat service and injects YouTube messages into Twitch chat.
-// Only activates on twitch.tv/theo — any other page is ignored entirely.
+// Only activates on Theo's configured Twitch page — any other page is ignored entirely.
 
 (function () {
   'use strict';
 
   // ─── Hard channel gate — extension only works on Theo's channel ─
-  const TARGET_TWITCH_CHANNEL = 'theo';
+  let TARGET_TWITCH_CHANNEL = 'theo';
 
   function isTargetChannelPage() {
     if (location.hostname !== 'www.twitch.tv' && location.hostname !== 'twitch.tv') {
@@ -446,6 +446,7 @@
     if (ws) { try { ws.close(1000, 'nav away'); } catch {} }
     ws = null;
     isConnected = false;
+    reconnectAttempts = 0;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
     pendingQueue.clear();
@@ -488,9 +489,12 @@
       const res = await fetch(CONFIG_URL, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
+        if (data && typeof data.twitchChannel === 'string' && data.twitchChannel) {
+          TARGET_TWITCH_CHANNEL = data.twitchChannel.toLowerCase();
+        }
         if (data && typeof data.wsUrl === 'string' && data.wsUrl) {
           chrome.storage.sync.set({ wsUrl: data.wsUrl });
-          console.log(`[TheoChat] Fetched WS URL from config: ${data.wsUrl}`);
+          console.log(`[TheoChat] Fetched WS URL from config: ${data.wsUrl} (channel=${TARGET_TWITCH_CHANNEL})`);
           return data.wsUrl;
         }
       }

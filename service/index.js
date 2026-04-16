@@ -11,6 +11,9 @@ const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || '';
 const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
+const TWITCH_CHANNEL = (process.env.TWITCH_CHANNEL || 'theo').toLowerCase();
+const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
+const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || '';
 // Auto-derive public URL from Railway env vars if not explicitly set.
 // Always prepends https:// if missing, strips trailing slashes, validates result.
 function derivePublicUrl() {
@@ -78,13 +81,27 @@ let videoId = VIDEO_ID || null;
 let nextPageToken = '';
 const processedIds = new Set();
 const activeMessages = new Map(); // messageId -> { userId, displayName }
+const pendingCandidateVideoIds = new Set();
+let liveCandidateInFlight = false;
 let running = true;
 let isStreaming = false; // true while connected to an active gRPC stream
+let pubsubVerified = false;
+let lastGrpcActivityAt = 0;
+let lastTwitchLiveCheckAt = 0;
+let lastTwitchLiveResult = null;
+let grpcWatchdogPending = false;
+let reconnectTimer = null;
+let grpcStopReason = null;
+let rateLimitCooldownMs = 5 * 60 * 1000;
+let pendingPubSubVideoId = '';
+let pendingPubSubReceivedAt = 0;
 
 // ─── Metrics & safety ──────────────────────────────────────────
 const QUOTA_DAILY_BUDGET = parseInt(process.env.QUOTA_DAILY_BUDGET || '9000', 10); // cap at 90% of 10K default
 const QUOTA_RECONCILE_CEILING = parseInt(process.env.QUOTA_RECONCILE_CEILING || '7500', 10); // stop reconcile at this point
 const MAX_WS_PER_IP = parseInt(process.env.MAX_WS_PER_IP || '5', 10);
+const GRPC_STALE_MS = parseInt(process.env.GRPC_STALE_MS || '75000', 10);
+const PUBSUB_CANDIDATE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const metrics = {
   startedAt: Date.now(),
@@ -92,6 +109,8 @@ const metrics = {
   quotaResetAt: nextMidnightPT(),
   messagesRelayed: 0,
   messagesDeleted: 0,
+  realtimeDeletes: 0,
+  reconcileDeletes: 0,
   reconcileRuns: 0,
   reconcileSkippedQuota: 0,
   apiErrors: 0,
@@ -100,6 +119,8 @@ const metrics = {
   wsRejectedForIp: 0,
   wsRejectedForToken: 0,
   pubsubNotifications: 0,
+  unknownMessageTypes: 0,
+  grpcReconnects: 0,
 };
 const connByIp = new Map();
 
@@ -140,16 +161,61 @@ function recordApiError(err, label) {
     }
   }
 
-  // Detect per-minute rate limit → 5-min cooldown for this operation type
+  // Detect per-minute rate limit → exponential cooldown, capped at 30 min
   if (err.code === 8 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit') || err.status === 429) {
-    rateLimitCooldownUntil = Date.now() + 5 * 60 * 1000;
-    console.warn(`  [API] Rate limit detected — cooldown for 5 min`);
+    rateLimitCooldownUntil = Date.now() + rateLimitCooldownMs;
+    console.warn(`  [API] Rate limit detected — cooldown for ${Math.round(rateLimitCooldownMs / 60000)} min`);
+    rateLimitCooldownMs = Math.min(rateLimitCooldownMs * 2, 30 * 60 * 1000);
   }
 }
 
 let rateLimitCooldownUntil = 0;
 function isInRateLimitCooldown() {
   return Date.now() < rateLimitCooldownUntil;
+}
+function clearRateLimitCooldown() {
+  rateLimitCooldownMs = 5 * 60 * 1000;
+}
+
+function rememberPubSubCandidate(videoId) {
+  pendingPubSubVideoId = videoId;
+  pendingPubSubReceivedAt = Date.now();
+}
+
+function clearPubSubCandidate() {
+  pendingPubSubVideoId = '';
+  pendingPubSubReceivedAt = 0;
+}
+
+function hasFreshPubSubCandidate() {
+  return Boolean(
+    pendingPubSubVideoId &&
+    pendingPubSubReceivedAt &&
+    Date.now() - pendingPubSubReceivedAt < PUBSUB_CANDIDATE_TTL_MS
+  );
+}
+
+function firstMatch(body, patterns) {
+  for (const pattern of patterns) {
+    const match = body.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function parsePubSubNotification(body) {
+  return {
+    videoId: firstMatch(body, [
+      /<yt:videoId>([^<]+)<\/yt:videoId>/,
+    ]),
+    channelId: firstMatch(body, [
+      /<yt:channelId>([^<]+)<\/yt:channelId>/,
+      /<uri>\s*https:\/\/www\.youtube\.com\/channel\/([^<\s]+)\s*<\/uri>/,
+      /<uri>\s*yt:channel:([^<\s]+)\s*<\/uri>/,
+      /<link[^>]+href="https:\/\/www\.youtube\.com\/xml\/feeds\/videos\.xml\?channel_id=([^"&]+)[^"]*"/,
+      /<id>\s*yt:channel:([^<\s]+)\s*<\/id>/,
+    ]),
+  };
 }
 
 // ─── YouTube REST API client (for stream discovery) ────────────
@@ -163,6 +229,8 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const parsedUrl = reqUrl.pathname;
+  const grpcHealthy = Boolean(isStreaming && lastGrpcActivityAt && Date.now() - lastGrpcActivityAt < GRPC_STALE_MS);
+  const twitchFallbackConfigured = Boolean(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET);
 
   if (parsedUrl === '/health' || parsedUrl === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -172,6 +240,14 @@ const server = http.createServer((req, res) => {
       liveChatId,
       videoId,
       streaming: isStreaming,
+      pubsubVerified,
+      twitchFallbackConfigured,
+      grpcHealthy,
+      lastGrpcActivityAt,
+      lastTwitchLiveCheckAt,
+      lastTwitchLiveResult,
+      pendingPubSubVideoId,
+      pendingPubSubReceivedAt,
       quota: {
         usedToday: metrics.quotaUsedToday,
         dailyBudget: QUOTA_DAILY_BUDGET,
@@ -194,6 +270,14 @@ const server = http.createServer((req, res) => {
       ...metrics,
       clientsCurrent: clientCount,
       streaming: isStreaming,
+      pubsubVerified,
+      twitchFallbackConfigured,
+      grpcHealthy,
+      lastGrpcActivityAt,
+      lastTwitchLiveCheckAt,
+      lastTwitchLiveResult,
+      pendingPubSubVideoId,
+      pendingPubSubReceivedAt,
       videoId,
       liveChatId,
       uniqueIpsConnected: connByIp.size,
@@ -203,6 +287,8 @@ const server = http.createServer((req, res) => {
         MAX_WS_PER_IP,
         RECONCILE_INTERVAL_MS,
         MESSAGE_AGE_GRACE_MS,
+        GRPC_STALE_MS,
+        PUBSUB_CANDIDATE_TTL_MS,
       },
     }, null, 2));
   } else if (parsedUrl === '/overlay') {
@@ -220,6 +306,7 @@ const server = http.createServer((req, res) => {
       const challenge = reqUrl.searchParams.get('hub.challenge');
       const mode = reqUrl.searchParams.get('hub.mode');
       if (challenge) {
+        pubsubVerified = true;
         console.log(`  [PubSub] Verification: mode=${mode}, echoing challenge`);
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end(challenge);
@@ -231,14 +318,27 @@ const server = http.createServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
-        // Extract videoId from Atom feed via regex (no XML parser dep needed)
-        const match = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-        if (match) {
-          const notifiedVideoId = match[1];
-          console.log(`  [PubSub] Notification: videoId=${notifiedVideoId}`);
-          handleLiveCandidate(notifiedVideoId).catch((err) => {
-            console.error('  [PubSub] handleLiveCandidate error:', err.message);
-          });
+        metrics.pubsubNotifications++;
+        const notification = parsePubSubNotification(body);
+        const notifiedVideoId = notification.videoId;
+        const notifiedChannelId = notification.channelId;
+
+        if (!notifiedChannelId) {
+          console.warn('  [PubSub] Ignoring notification without a channel ID');
+        } else if (CHANNEL_ID && notifiedChannelId !== CHANNEL_ID) {
+          console.log(`  [PubSub] Ignoring channel ${notifiedChannelId} (expected ${CHANNEL_ID})`);
+        } else if (notifiedVideoId) {
+          console.log(`  [PubSub] Notification: channelId=${notifiedChannelId || 'unknown'} videoId=${notifiedVideoId}`);
+          rememberPubSubCandidate(notifiedVideoId);
+          if (clientCount > 0) {
+            handleLiveCandidate(notifiedVideoId, { source: 'pubsub', notifiedChannelId }).catch((err) => {
+              console.error('  [PubSub] handleLiveCandidate error:', err.message);
+            });
+          } else {
+            console.log('  [PubSub] No active clients — cached candidate for on-demand verification');
+          }
+        } else {
+          console.warn('  [PubSub] Ignoring notification without a video ID');
         }
         res.writeHead(200);
         res.end();
@@ -298,6 +398,11 @@ wss.on('connection', (ws, req) => {
   });
   // If a client connects during a grace period, cancel the shutdown
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (clientCount === 1) {
+    kickoffDetectionForActiveClient().catch((err) => {
+      console.error(`  [Detect] Initial detection failed: ${err.message}`);
+    });
+  }
 });
 
 function broadcast(event) {
@@ -323,12 +428,88 @@ function scheduleIdleShutdown() {
   console.log(`  [Idle] No clients connected — scheduling gRPC close in ${IDLE_GRACE_MS / 1000}s`);
   idleTimer = setTimeout(() => {
     idleTimer = null;
-    if (clientCount > 0) return; // someone reconnected — abort
+    if (clientCount > 0) return;
     if (isStreaming) {
-      console.log('  [Idle] Grace expired, no clients reconnected — stopping YouTube work');
-      isStreaming = false; // gRPC loop will exit on next iteration check
+      console.log('  [Idle] Grace expired — cancelling gRPC stream');
+      stopGrpcStream('idle');
     }
   }, IDLE_GRACE_MS);
+}
+
+// Module-level ref to the active gRPC stream so we can cancel it on idle
+let activeGrpcStream = null;
+
+function clearTrackedMessages(messageIds) {
+  for (const messageId of messageIds) {
+    activeMessages.delete(messageId);
+    messageTimestamps.delete(messageId);
+  }
+}
+
+async function kickoffDetectionForActiveClient() {
+  if (isStreaming) return;
+
+  let candidateHandled = false;
+  if (hasFreshPubSubCandidate()) {
+    const candidateVideoId = pendingPubSubVideoId;
+    console.log(`  [PubSub] Verifying cached candidate ${candidateVideoId} on first client connect`);
+    await handleLiveCandidate(candidateVideoId, { source: 'pubsub-cached', notifiedChannelId: CHANNEL_ID });
+    candidateHandled = isStreaming;
+  } else {
+    clearPubSubCandidate();
+  }
+
+  if (!candidateHandled) {
+    const hadTwitchFallback = Boolean(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET);
+    await twitchPoll();
+    if (!isStreaming && !hadTwitchFallback) {
+      await triggerYouTubeSearch('client-connect');
+    }
+  }
+}
+
+function stopGrpcStream(reason) {
+  grpcStopReason = reason;
+  isStreaming = false;
+  if (reason !== 'restart' && reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (activeGrpcStream) {
+    try { activeGrpcStream.cancel(); } catch {}
+    activeGrpcStream = null;
+  }
+}
+
+function scheduleReconnect(videoIdToRetry, delayMs, reason) {
+  if (!running || reconnectTimer || !videoIdToRetry) return;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    if (!running || isStreaming) return;
+    if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
+      console.warn(`  [YT] Skipping reconnect (${reason}) — quota near ceiling`);
+      return;
+    }
+
+    try {
+      metrics.grpcReconnects++;
+      const chatId = await checkIfLive(videoIdToRetry);
+      if (!chatId) {
+        console.log(`  [YT] Reconnect aborted (${reason}) — stream no longer live`);
+        videoId = null;
+        liveChatId = null;
+        return;
+      }
+      videoId = videoIdToRetry;
+      liveChatId = chatId;
+      connectGrpcStream().catch((err) => {
+        console.error(`  [YT] Reconnect gRPC error (${reason}): ${err.message}`);
+        isStreaming = false;
+      });
+    } catch (err) {
+      console.error(`  [YT] Reconnect failed (${reason}): ${err.message}`);
+    }
+  }, delayMs);
 }
 
 // Heartbeat ping every 30s so extensions can detect stale connections
@@ -347,6 +528,7 @@ async function checkIfLive(targetVideoId) {
     id: [targetVideoId],
     part: ['liveStreamingDetails', 'snippet'],
   });
+  clearRateLimitCooldown();
 
   const item = videoResponse.data.items?.[0];
   if (!item) return null;
@@ -362,11 +544,10 @@ async function checkIfLive(targetVideoId) {
   }
 
   const broadcastStatus = snippet.liveBroadcastContent;
-  // LIVE ONLY — not 'upcoming' (waiting room), not 'none' (ended/replay)
-  const isLive = broadcastStatus === 'live';
+  const isActive = broadcastStatus === 'live';
   const chatId = item.liveStreamingDetails?.activeLiveChatId;
 
-  if (isLive && chatId) {
+  if (isActive && chatId) {
     console.log(`  [YT] Live: "${snippet.title}" (${targetVideoId})`);
     return chatId;
   }
@@ -374,68 +555,74 @@ async function checkIfLive(targetVideoId) {
   return null;
 }
 
-// ─── One-time startup discovery (no polling) ───────────────────
-// Uses search.list only ONCE at boot if CHANNEL_ID is set and no VIDEO_ID.
-// After this, we rely on PubSub webhook notifications, NOT polling.
+// ─── Test-only startup discovery ───────────────────────────────
 async function startupDiscovery() {
-  if (videoId) {
-    const chatId = await checkIfLive(videoId);
-    if (chatId) { liveChatId = chatId; return true; }
-    return false;
-  }
-  if (!CHANNEL_ID) return false;
-
-  console.log(`  [YT] Startup check on channel ${CHANNEL_ID}...`);
-  try {
-    // LIVE ONLY — no waiting rooms, no upcoming, no replays
-    recordApiCall(100, 'search.list(startup-live)');
-    const response = await youtube.search.list({
-      channelId: CHANNEL_ID,
-      eventType: 'live',
-      type: ['video'],
-      part: ['id,snippet'],
-    });
-    const live = response.data.items?.[0];
-    if (!live) {
-      console.log('  [YT] Not live at startup. Waiting for PubSub notifications...');
-      return false;
+  if (VIDEO_ID) {
+    console.log(`  [YT] Manual VIDEO_ID override set — checking ${VIDEO_ID}`);
+    const chatId = await checkIfLive(VIDEO_ID);
+    if (chatId) {
+      videoId = VIDEO_ID;
+      liveChatId = chatId;
+      return true;
     }
-    videoId = live.id.videoId;
-    const chatId = await checkIfLive(videoId);
-    if (chatId) { liveChatId = chatId; return true; }
-  } catch (err) {
-    console.error(`  [YT] Startup discovery error: ${err.message}`);
+    return false;
   }
   return false;
 }
 
 // ─── Handle a PubSub notification: verify, then connect ────────
-async function handleLiveCandidate(candidateVideoId) {
+async function handleLiveCandidate(candidateVideoId, { source = 'unknown', notifiedChannelId = '' } = {}) {
+  if (notifiedChannelId && CHANNEL_ID && notifiedChannelId !== CHANNEL_ID) {
+    console.log(`  [YT] Rejecting ${candidateVideoId} from ${source} — notified channel ${notifiedChannelId} !== ${CHANNEL_ID}`);
+    return;
+  }
+  if (source.startsWith('pubsub')) {
+    clearPubSubCandidate();
+  }
+  if (pendingCandidateVideoIds.has(candidateVideoId)) {
+    console.log(`  [YT] Candidate ${candidateVideoId} already being handled (${source})`);
+    return;
+  }
+  if (liveCandidateInFlight) {
+    console.log(`  [YT] Another live candidate is already in flight — skipping ${candidateVideoId} (${source})`);
+    return;
+  }
   if (isStreaming) {
     console.log(`  [YT] Already streaming ${videoId}, ignoring notification for ${candidateVideoId}`);
     return;
   }
-  const chatId = await checkIfLive(candidateVideoId);
-  if (!chatId) return;
-  videoId = candidateVideoId;
-  liveChatId = chatId;
+  pendingCandidateVideoIds.add(candidateVideoId);
+  liveCandidateInFlight = true;
+  try {
+    const chatId = await checkIfLive(candidateVideoId);
+    if (!chatId) return;
+    videoId = candidateVideoId;
+    liveChatId = chatId;
+    nextPageToken = '';
+    lastGrpcActivityAt = Date.now();
 
-  // Fetch custom emoji library for this stream (no quota cost)
-  fetchEmojiLibrary(videoId).then((map) => {
-    emojiLibrary = map;
-    broadcast({ type: 'yt.emoji.library', emojis: map });
-  });
+    // Fetch custom emoji library for this stream (no quota cost)
+    fetchEmojiLibrary(videoId).then((map) => {
+      emojiLibrary = map;
+      broadcast({ type: 'yt.emoji.library', emojis: map });
+    });
 
-  connectGrpcStream().catch((err) => {
-    console.error('  [YT] gRPC error:', err.message);
-    isStreaming = false;
-  });
+    connectGrpcStream().catch((err) => {
+      console.error('  [YT] gRPC error:', err.message);
+      isStreaming = false;
+    });
+  } finally {
+    liveCandidateInFlight = false;
+    pendingCandidateVideoIds.delete(candidateVideoId);
+  }
 }
 
 // ─── gRPC stream — runs until chat ends, then returns ──────────
 async function connectGrpcStream() {
   console.log('  [YT] Connecting to YouTube gRPC stream...');
   isStreaming = true;
+  grpcStopReason = null;
+  lastGrpcActivityAt = Date.now();
 
   const client = new V3DataLiveChatMessageServiceClient(
     'youtube.googleapis.com:443',
@@ -454,9 +641,11 @@ async function connectGrpcStream() {
       metadata.add('x-goog-api-key', API_KEY);
 
       const stream = client.streamList(request, metadata);
+      activeGrpcStream = stream; // so idle shutdown can cancel it
 
       try {
         for await (const response of stream) {
+          lastGrpcActivityAt = Date.now();
           const res = response.toObject();
           processMessages(res.itemsList || []);
           nextPageToken = response.getNextPageToken() || '';
@@ -474,38 +663,39 @@ async function connectGrpcStream() {
     }
   } finally {
     const wasVideoId = videoId;
+    const stopReason = grpcStopReason || 'stream-ended';
+    const shouldReconnect =
+      running &&
+      wasVideoId &&
+      stopReason !== 'idle' &&
+      stopReason !== 'twitch-offline' &&
+      metrics.quotaUsedToday < QUOTA_RECONCILE_CEILING;
     isStreaming = false;
-    liveChatId = null;
     nextPageToken = '';
-    broadcast({ type: 'yt.chat.ended' });
+    activeGrpcStream = null;
+    grpcStopReason = null;
 
-    // If stream ended unexpectedly, try reconnecting ONCE after 10s.
-    // Stop if quota is near the ceiling — prevents death spiral.
-    if (running && wasVideoId && metrics.quotaUsedToday < QUOTA_RECONCILE_CEILING) {
+    if (stopReason === 'restart') {
+      console.log('  [YT] Restarting gRPC stream after watchdog recovery');
+      scheduleReconnect(wasVideoId, 1000, stopReason);
+      return;
+    }
+
+    liveChatId = null;
+    if (!shouldReconnect) {
+      videoId = null;
+      emojiLibrary = {};
+      clearTrackedMessages([...activeMessages.keys()]);
+    }
+
+    if (stopReason === 'idle' || stopReason === 'twitch-offline' || stopReason === 'stream-ended') {
+      broadcast({ type: 'yt.chat.ended' });
+    }
+
+    if (shouldReconnect) {
       console.log('  [YT] Attempting reconnect in 10 seconds...');
-      setTimeout(async () => {
-        if (isStreaming) return;
-        if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
-          console.warn('  [YT] Skipping reconnect — quota near ceiling');
-          return;
-        }
-        try {
-          const chatId = await checkIfLive(wasVideoId);
-          if (chatId) {
-            videoId = wasVideoId;
-            liveChatId = chatId;
-            connectGrpcStream().catch((err) => {
-              console.error('  [YT] Reconnect gRPC error:', err.message);
-              isStreaming = false;
-            });
-          } else {
-            console.log('  [YT] Stream no longer live — returning to idle.');
-          }
-        } catch (err) {
-          console.error('  [YT] Reconnect failed:', err.message);
-        }
-      }, 10000);
-    } else if (running && wasVideoId) {
+      scheduleReconnect(wasVideoId, 10000, stopReason);
+    } else if (running && wasVideoId && stopReason !== 'idle' && stopReason !== 'twitch-offline') {
       console.warn('  [YT] NOT retrying — quota exhausted. Waiting for reset or manual trigger.');
     }
   }
@@ -520,7 +710,7 @@ async function connectGrpcStream() {
 // Quota cost: 5 units per call. 45s interval = ~9,600 units/day when
 // streaming continuously. Since Theo streams a few hours/day, real cost
 // is a fraction of the daily 10K budget.
-const RECONCILE_INTERVAL_MS = 90 * 1000; // 90s — safe for 24/7 streaming (4.8K quota/day)
+const RECONCILE_INTERVAL_MS = 30 * 1000; // 30s — bounded moderation lag while live
 const MESSAGE_AGE_GRACE_MS = 10 * 60 * 1000; // only reconcile messages <10 min old
 const messageTimestamps = new Map(); // messageId -> ts we broadcast it
 
@@ -548,6 +738,7 @@ async function reconcileMessages() {
       part: ['id'],
       maxResults: 2000,
     });
+    clearRateLimitCooldown();
     const livePresent = new Set((res.data.items || []).map((m) => m.id));
 
     let removed = 0;
@@ -556,13 +747,13 @@ async function reconcileMessages() {
       if (ts < cutoff) continue; // too old to verify; don't touch
       if (!livePresent.has(msgId)) {
         console.log(`  [RECONCILE] Removing ${msgId} (${info.displayName}) — no longer in YouTube chat`);
-        activeMessages.delete(msgId);
-        messageTimestamps.delete(msgId);
+        clearTrackedMessages([msgId]);
         broadcast({ type: 'yt.message.deleted', messageId: msgId });
         removed++;
       }
     }
     if (removed > 0) {
+      metrics.reconcileDeletes += removed;
       console.log(`  [RECONCILE] Swept ${removed} orphaned messages`);
     }
   } catch (err) {
@@ -571,23 +762,171 @@ async function reconcileMessages() {
 }
 setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
 
-// ─── Auto-heal live detection — catches PubSub misses (FREE, no quota) ─
-// Exponential backoff: checks frequently after a stream ends (5 min),
-// slows down over time if nothing found (up to 60 min max).
-// Resets to fast-check when a stream is detected or ends.
-// Prevents hammering YouTube 24/7 when Theo isn't streaming.
-const AUTOHEAL_MIN_MS = 5 * 60 * 1000;   // 5 min right after stream ends
-const AUTOHEAL_MAX_MS = 60 * 60 * 1000;  // 60 min during long inactivity
-let autoHealInterval = AUTOHEAL_MIN_MS;
-let autoHealTimer = null;
+async function grpcWatchdog() {
+  if (!isStreaming || !videoId || !liveChatId || clientCount === 0 || grpcWatchdogPending) return;
+  if (!lastGrpcActivityAt || Date.now() - lastGrpcActivityAt < GRPC_STALE_MS) return;
+  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING || isInRateLimitCooldown()) return;
 
-function scheduleAutoHeal() {
-  if (autoHealTimer) clearTimeout(autoHealTimer);
-  autoHealTimer = setTimeout(async () => {
-    await autoHealLiveCheck();
-    scheduleAutoHeal();
-  }, autoHealInterval);
+  grpcWatchdogPending = true;
+  try {
+    let twitchLive = null;
+    if (TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET) {
+      twitchLive = await isTwitchLive();
+      if (twitchLive === false) {
+        console.warn('  [Watchdog] Twitch says Theo is offline — stopping gRPC');
+        stopGrpcStream('twitch-offline');
+        return;
+      }
+    }
+
+    const chatId = await checkIfLive(videoId);
+    if (chatId) {
+      liveChatId = chatId;
+      console.warn('  [Watchdog] gRPC stream went stale — restarting');
+      stopGrpcStream('restart');
+    } else {
+      console.warn('  [Watchdog] YouTube no longer reports the stream as live');
+      videoId = null;
+      stopGrpcStream('stream-ended');
+    }
+  } catch (err) {
+    recordApiError(err, 'grpc-watchdog');
+  } finally {
+    grpcWatchdogPending = false;
+  }
 }
+setInterval(() => {
+  grpcWatchdog().catch((err) => {
+    console.error(`  [Watchdog] Failed: ${err.message}`);
+  });
+}, 15000);
+
+// NOTE: The old HTML-scraping autoHeal has been removed entirely.
+// Live detection now uses exclusively SDK + channel-scoped paths:
+//   1. PubSub webhook + videos.list (channel-verified)
+//   2. Twitch Helix poll + search.list (channel-scoped)
+//   3. Startup check on first client connect
+// Each path funnels through checkIfLive() which hard-rejects any video
+// whose snippet.channelId !== CHANNEL_ID. Zero chance of wrong-channel leakage.
+
+// ─── Twitch Helix live detection ───────────────────────────────
+// Reliable "is Theo live on Twitch?" signal. Free, 120 req/min limit.
+// When Twitch flips from offline→online, trigger a single YouTube
+// search.list to find the current YouTube broadcast (100 quota, one-time).
+// Falls back gracefully to PubSub-only if credentials are missing/invalid.
+let twitchToken = null;
+let twitchTokenExpiresAt = 0;
+let twitchLastLive = false;
+let twitchAuthFailed = false;
+
+async function getTwitchToken() {
+  if (twitchAuthFailed) return null;
+  if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) return null;
+  if (twitchToken && Date.now() < twitchTokenExpiresAt - 60000) return twitchToken;
+
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: TWITCH_CLIENT_ID,
+        client_secret: TWITCH_CLIENT_SECRET,
+        grant_type: 'client_credentials',
+      }).toString(),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`  [Twitch] Auth failed (${res.status}): ${body.slice(0, 200)}`);
+      twitchAuthFailed = true;
+      return null;
+    }
+    const data = await res.json();
+    twitchToken = data.access_token;
+    twitchTokenExpiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+    console.log('  [Twitch] Got access token');
+    return twitchToken;
+  } catch (err) {
+    console.error(`  [Twitch] Auth error: ${err.message}`);
+    return null;
+  }
+}
+
+async function isTwitchLive() {
+  const token = await getTwitchToken();
+  if (!token) return null; // unknown — auth missing or failed
+
+  try {
+    const res = await fetch(`https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(TWITCH_CHANNEL)}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Client-Id': TWITCH_CLIENT_ID,
+      },
+    });
+    if (res.status === 401) {
+      twitchToken = null; // token expired — will refresh on next call
+      return null;
+    }
+    if (!res.ok) {
+      console.error(`  [Twitch] streams check failed: ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    lastTwitchLiveCheckAt = Date.now();
+    lastTwitchLiveResult = (data.data || []).length > 0;
+    return lastTwitchLiveResult;
+  } catch (err) {
+    console.error(`  [Twitch] isLive error: ${err.message}`);
+    return null;
+  }
+}
+
+async function twitchPoll() {
+  // Only poll while someone's using the extension — zero-idle guarantee
+  if (clientCount === 0) return;
+  if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) return;
+
+  const nowLive = await isTwitchLive();
+  if (nowLive === null) return; // unknown state — skip
+
+  // Transition offline → online: Theo just started on Twitch
+  if (nowLive && !twitchLastLive) {
+    console.log('  [Twitch] Theo went LIVE — triggering YouTube check');
+    triggerYouTubeSearch();
+  }
+  // Transition online → offline: clean up gRPC
+  if (!nowLive && twitchLastLive && isStreaming) {
+    console.log('  [Twitch] Theo went OFFLINE on Twitch — closing gRPC');
+    stopGrpcStream('twitch-offline');
+  }
+  twitchLastLive = nowLive;
+}
+
+async function triggerYouTubeSearch(reason = 'twitch-triggered') {
+  if (isStreaming) return;
+  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) return;
+  if (clientCount === 0) return;
+  try {
+    recordApiCall(100, `search.list(${reason})`);
+    const res = await youtube.search.list({
+      channelId: CHANNEL_ID,
+      eventType: 'live',
+      type: ['video'],
+      part: ['id'],
+    });
+    clearRateLimitCooldown();
+    const item = res.data.items?.[0];
+    if (item?.id?.videoId) {
+      await handleLiveCandidate(item.id.videoId, { source: reason });
+    } else {
+      console.log(`  [Detect] No live broadcast found on YouTube yet (${reason})`);
+    }
+  } catch (err) {
+    recordApiError(err, `search.list(${reason})`);
+  }
+}
+
+// Poll Twitch every 60s
+setInterval(twitchPoll, 60 * 1000);
 
 // ─── Emoji library scraper ─────────────────────────────────────
 // YouTube's v3 Data API doesn't expose custom emoji image URLs, but the
@@ -637,54 +976,6 @@ async function fetchEmojiLibrary(vid) {
   }
 }
 
-async function autoHealLiveCheck() {
-  if (!CHANNEL_ID) return;
-  // Zero-quota idle: don't check YouTube when nobody's using the extension
-  if (clientCount === 0) { autoHealBackOff(); return; }
-  if (isStreaming) {
-    autoHealInterval = AUTOHEAL_MIN_MS;
-    return;
-  }
-
-  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) { autoHealBackOff(); return; }
-  if (isInRateLimitCooldown()) { autoHealBackOff(); return; }
-
-  try {
-    // YouTube redirects /channel/X/live → /watch?v=LIVE_ID when live,
-    // → /channel/X (or similar) when NOT live. We only need the final URL.
-    const res = await fetch(`https://www.youtube.com/channel/${CHANNEL_ID}/live`, {
-      redirect: 'follow',
-      headers: { 'User-Agent': 'Mozilla/5.0 TheoChatAutoheal/1.0' },
-    });
-    if (!res.ok) { autoHealBackOff(); return; }
-
-    // Check where we landed
-    const finalUrl = res.url || '';
-    const watchMatch = finalUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-
-    if (!watchMatch) {
-      // Didn't redirect to a watch page → not live
-      autoHealBackOff();
-      return;
-    }
-
-    const candidateId = watchMatch[1];
-    console.log(`  [AutoHeal] Detected live for ${CHANNEL_ID} (interval=${Math.round(autoHealInterval / 60000)}min): ${candidateId}`);
-    autoHealInterval = AUTOHEAL_MIN_MS;
-    await handleLiveCandidate(candidateId);
-  } catch (err) {
-    console.error(`  [AutoHeal] Check failed (non-fatal): ${err.message}`);
-    autoHealBackOff();
-  }
-}
-
-function autoHealBackOff() {
-  autoHealInterval = Math.min(autoHealInterval * 2, AUTOHEAL_MAX_MS);
-}
-
-// Start the backoff timer
-scheduleAutoHeal();
-
 // ─── PubSub subscription ───────────────────────────────────────
 async function subscribeToPubSub() {
   if (!CHANNEL_ID) {
@@ -692,7 +983,7 @@ async function subscribeToPubSub() {
     return;
   }
   if (!PUBLIC_URL) {
-    console.log('  [PubSub] No PUBLIC_URL set; skipping subscription (will rely on startup check only).');
+    console.log('  [PubSub] No PUBLIC_URL set; skipping subscription.');
     return;
   }
   const topic = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${CHANNEL_ID}`;
@@ -739,6 +1030,7 @@ function processMessages(messages) {
     // for any moderation actions YouTube might emit with unknown type codes.
     if (type !== undefined && type !== MessageType.TEXT_MESSAGE_EVENT) {
       const typeName = TYPE_NAMES[type] || `UNKNOWN(${type})`;
+      if (!TYPE_NAMES[type]) metrics.unknownMessageTypes++;
       console.log(`  [YT][DBG] msgId=${id} type=${typeName} snippetKeys=${Object.keys(snippet).join(',')}`);
     }
 
@@ -795,8 +1087,8 @@ function processMessages(messages) {
 
       const hadIt = activeMessages.has(deletedId);
       if (deletedId) {
-        activeMessages.delete(deletedId);
-        messageTimestamps.delete(deletedId);
+        clearTrackedMessages([deletedId]);
+        metrics.realtimeDeletes++;
         broadcast({ type: 'yt.message.deleted', messageId: deletedId });
         console.log(`  [YT] Deleted via ${TYPE_NAMES[type]}: ${deletedId} (we had it: ${hadIt})`);
       } else {
@@ -810,7 +1102,8 @@ function processMessages(messages) {
       for (const [msgId, info] of activeMessages) {
         if (info.userId === bannedUserId) toRemove.push(msgId);
       }
-      for (const msgId of toRemove) activeMessages.delete(msgId);
+      clearTrackedMessages(toRemove);
+      metrics.realtimeDeletes += toRemove.length;
       broadcast({
         type: 'yt.user.banned',
         userId: bannedUserId,
@@ -847,14 +1140,11 @@ async function main() {
 
   // Subscribe to PubSub so YouTube pushes notifications when channel goes live.
   // Retry every 5 min until successful, then renew every 4 days.
-  let pubsubVerified = false;
   async function ensurePubSub() {
     try {
       await subscribeToPubSub();
-      pubsubVerified = true;
     } catch (err) {
       console.error('  [PubSub] setup error:', err.message);
-      pubsubVerified = false;
     }
   }
   ensurePubSub();

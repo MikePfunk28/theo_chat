@@ -46,6 +46,7 @@ let healthTimer = null;
 // ─── Init ────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
+  chrome.runtime.sendMessage({ type: 'theochat.popupOpen', value: true });
   els.version.textContent = `v${chrome.runtime.getManifest().version}`;
 
   const stored = await chrome.storage.sync.get({ enabled: true, delayMs: 0, wsUrl: '' });
@@ -65,6 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 window.addEventListener('unload', () => {
+  chrome.runtime.sendMessage({ type: 'theochat.popupOpen', value: false });
   if (healthTimer) clearInterval(healthTimer);
 });
 

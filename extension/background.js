@@ -5,22 +5,54 @@
 const POLL_INTERVAL = 30 * 1000; // 30s — lightweight, just one small fetch
 let lastStreaming = false;
 let wsUrl = '';
+let targetTwitchChannel = 'theo';
+let popupOpen = false;
 
-async function getWsUrl() {
+function isTargetTwitchUrl(url) {
   try {
-    const stored = await chrome.storage.sync.get({ wsUrl: '' });
-    if (stored.wsUrl) return stored.wsUrl;
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'www.twitch.tv' && parsed.hostname !== 'twitch.tv') return false;
+    const path = parsed.pathname.toLowerCase();
+    return path === `/${targetTwitchChannel}` ||
+           path.startsWith(`/${targetTwitchChannel}/`) ||
+           path.startsWith(`/popout/${targetTwitchChannel}/`);
+  } catch {
+    return false;
+  }
+}
+
+async function hasTargetTabOpen() {
+  const tabs = await chrome.tabs.query({});
+  return tabs.some((tab) => typeof tab.url === 'string' && isTargetTwitchUrl(tab.url));
+}
+
+async function getRuntimeConfig() {
+  const stored = await chrome.storage.sync.get({ wsUrl: '' });
+  try {
     const res = await fetch('https://t3yt.mikepfunk.com/api/config', { cache: 'no-store' });
     const data = await res.json();
-    return data.wsUrl || '';
+    if (data?.twitchChannel) targetTwitchChannel = String(data.twitchChannel).toLowerCase();
+    return {
+      wsUrl: data?.wsUrl || stored.wsUrl || '',
+      twitchChannel: data?.twitchChannel || targetTwitchChannel,
+    };
   } catch {
-    return '';
+    return { wsUrl: stored.wsUrl || '', twitchChannel: targetTwitchChannel };
   }
 }
 
 async function checkLiveStatus() {
   try {
-    if (!wsUrl) wsUrl = await getWsUrl();
+    if (!popupOpen && !(await hasTargetTabOpen())) {
+      setBadge('', '');
+      return;
+    }
+
+    if (!wsUrl) {
+      const config = await getRuntimeConfig();
+      wsUrl = config.wsUrl || '';
+      if (config.twitchChannel) targetTwitchChannel = String(config.twitchChannel).toLowerCase();
+    }
     if (!wsUrl) {
       setBadge('', '');
       return;
@@ -78,5 +110,12 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.wsUrl) {
     wsUrl = changes.wsUrl.newValue || '';
     checkLiveStatus();
+  }
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'theochat.popupOpen') {
+    popupOpen = !!message.value;
+    if (popupOpen) checkLiveStatus();
   }
 });

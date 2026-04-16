@@ -1,6 +1,6 @@
 # TheoChat
 
-Merges YouTube live chat into your Twitch chat view. YouTube messages appear inline in the native Twitch chat panel with a red `YT` badge. When YouTube mods delete a message or ban a user, those actions sync to the Twitch view instantly. Built for [theo.gg](https://theo.gg) — but works for any streamer who simulcasts to YouTube + Twitch.
+Merges Theo's YouTube live chat into Theo's Twitch chat view. YouTube messages appear inline in the native Twitch chat panel with a red `YT` badge. When YouTube mods delete a message or ban a user, those actions are mirrored into the Twitch view immediately, with a `30s` fallback reconciliation sweep while live.
 
 **Live site:** [t3yt.mikepfunk.com](https://t3yt.mikepfunk.com)
 
@@ -21,7 +21,7 @@ YouTube PubSub push ───► [Railway service] ──(videos.list, 1 quota)�
                          Twitch chat panel ─── YT messages + mod sync
 ```
 
-**Push-based, zero idle quota.** The Railway service subscribes once to YouTube's PubSubHubbub. YouTube pushes a notification the instant you go live. The service verifies with one `videos.list` call (1 quota unit), connects the gRPC stream, and broadcasts messages over WebSocket to the browser extension. No polling, ever.
+**Push-first, zero idle YouTube quota.** The Railway service subscribes once to YouTube's PubSubHubbub. YouTube pushes a notification the instant Theo goes live. If nobody is using the bridge yet, the service caches that candidate and waits. Once a client connects, it verifies the cached candidate or falls back to Twitch Helix + a single channel-scoped YouTube `search.list`. During an active stream, the service also runs a `30s` `liveChatMessages.list` reconciliation sweep for moderation safety. Offline YouTube quota remains `0`.
 
 **Read-only mirror.** YouTube is the source of truth. We never write to YouTube, never touch Twitch's actual chat. We just paint YouTube messages into Theo's Twitch browser tab.
 
@@ -37,7 +37,7 @@ Three deployable surfaces:
 |---|---|---|---|
 | **Service** | Node.js + gRPC + ws | Railway | Connects to YouTube, relays chat via WebSocket, serves `/overlay` |
 | **Landing + API** | Cloudflare Worker | Cloudflare | `t3yt.mikepfunk.com` landing, `/api/config`, `/privacy` |
-| **Extension** | WebExtension MV3 | Firefox/Zen/Chrome | Injects YouTube messages into Twitch DOM, popup control rig |
+| **Extension** | WebExtension MV3 | Zen / Firefox | Injects YouTube messages into Twitch DOM, popup control rig |
 
 ### Design language
 
@@ -53,14 +53,16 @@ Every surface shares the same Impeccable-aligned visual system:
 
 - **Zero-delay by default** — messages appear instant
 - **Opt-in mod buffer** — slider in popup lets Theo hold messages 0–30s so mods can delete on YouTube before viewers ever see them; deleted-while-buffered messages never render
-- **Instant mod sync** — deletions and bans from YouTube mods reflect in the Twitch view immediately
+- **Two-layer mod sync** — deletions and bans reflect immediately when YouTube emits the event, with a `30s` fallback sweep for missed moderation events
 - **Super chats, member badges, owner badges** pass through with proper styling
 - **Auto-reconnect** with exponential backoff (3s → 6s → 12s → 24s → max 30s) on both the gRPC and WebSocket layers
 - **Heartbeat watchdog** — service pings every 30s; extension force-reconnects if no heartbeat for 90s (detects stuck connections)
 - **Defensive error isolation** — all event handlers wrapped in `try/catch` so a malformed message or DOM glitch never affects native Twitch chat
 - **Visible errors + manual reconnect** — last error surfaces in the popup with a RECONNECT button for recovery without reloading the tab
 - **PubSub auto-renewal** every 4 days (subscription lease is 5 days)
-- **Zero-config extension** — fetches WS URL from `t3yt.mikepfunk.com/api/config` at startup; Theo never types a URL
+- **On-demand activation** — PubSub candidates are cached, but YouTube API work only begins when at least one client is actually connected
+- **Zero-config extension** — fetches WS URL + Twitch channel from `t3yt.mikepfunk.com/api/config` at startup; Theo never types a URL
+- **Identity locked** — Twitch injection is locked to `theo`, and YouTube verification is locked server-side to `YOUTUBE_CHANNEL_ID`
 
 ---
 
@@ -77,7 +79,7 @@ theo_chat/
 │   └── package.json
 │
 ├── extension/                 # Browser extension (WebExtension MV3)
-│   ├── manifest.json          # Firefox/Zen + Chrome compatible
+│   ├── manifest.json          # Zen / Firefox MV3 manifest
 │   ├── content.js             # Twitch DOM injection, delay queue, WS client
 │   ├── theochat.css           # Injected message styling
 │   ├── popup.html             # Control rig — toggle, delay slider, telemetry
@@ -102,22 +104,31 @@ theo_chat/
 
 ### Railway environment variables
 
+Configure these in the Railway service **Variables** tab. They are read at runtime from `process.env.*` and are **not** committed to git.
+
 | Variable | Required | Purpose |
 |---|---|---|
 | `GOOGLE_API_KEY` | ✓ | YouTube Data API key (supports `YOUTUBE_API_KEY` as alias) |
-| `YOUTUBE_CHANNEL_ID` | ✓ | Target channel ID (starts with `UC...`) |
+| `YOUTUBE_CHANNEL_ID` | ✓ | Theo's canonical YouTube channel ID (starts with `UC...`) |
+| `TWITCH_CHANNEL` | recommended | Theo's Twitch login. Defaults to `theo` |
+| `TWITCH_CLIENT_ID` | recommended | Enables Twitch Helix live-state fallback |
+| `TWITCH_CLIENT_SECRET` | recommended | Enables Twitch Helix live-state fallback |
 | `PUBLIC_URL` | optional | Service's public URL. Auto-derived from Railway's built-in `RAILWAY_PUBLIC_DOMAIN` if not set. Only set manually for non-Railway deploys. |
 | `WS_TOKEN` | optional | Shared secret for WebSocket auth |
-| `YOUTUBE_VIDEO_ID` | optional | Override for testing — points service at a specific video instead of discovering from channel |
+| `YOUTUBE_VIDEO_ID` | optional | Test override — points the service at a specific live video instead of waiting for PubSub/Twitch fallback |
+| `METRICS_TOKEN` | optional | Protects the `/metrics` endpoint |
 | `PORT` | auto | Set by Railway |
 
 ### Cloudflare Worker
 
-The Railway WebSocket URL is hardcoded as `WS_URL` at the top of `worker/src/index.js`. Update + redeploy if the service moves.
+Set these as Worker **Variables / Secrets** in the Cloudflare dashboard or via `wrangler secret put`. They are read at runtime from `env.*` and are **not** committed to git.
+
+- `WS_URL` — Railway service WebSocket URL
+- `TWITCH_CHANNEL` — Theo's Twitch login, usually `theo`
 
 ### Extension
 
-Auto-configures by fetching from `https://t3yt.mikepfunk.com/api/config`. Users never touch settings unless they want to override via the **Advanced** page (popup footer).
+Auto-configures by fetching from `https://t3yt.mikepfunk.com/api/config`. Users never touch settings unless they want to override the service endpoint via the **Advanced** page (popup footer). The extension does not expose a streamer/channel selector; production identity stays locked to Theo.
 
 ---
 
@@ -170,7 +181,7 @@ curl -X POST https://theochat-production.up.railway.app/webhook/youtube \
 Submit `extension/` to [addons.mozilla.org](https://addons.mozilla.org/developers/) for unlisted signing. AMO returns a signed `.xpi` you can host at `t3yt.mikepfunk.com/download` for one-click install.
 
 ### For Chrome / Chromium
-Same `extension/` folder works. `chrome://extensions` → Developer Mode → Load unpacked.
+Not the primary target for this repo. Validate MV3 behavior separately before treating Chromium as production-ready.
 
 ---
 
@@ -203,11 +214,12 @@ YouTube Data API has a default 10,000 units/day. TheoChat's design:
 
 | State | Cost |
 |---|---|
-| Idle (nothing happening) | **0 units** — PubSub is free |
-| Stream starts (webhook fires) | **1 unit** (one `videos.list` call) |
-| Entire session (hours of chat) | **0 additional** — gRPC stream is included in that 1-unit setup |
+| Idle (nothing happening) | **0 units** — PubSub is free and the service does not call YouTube while offline |
+| Stream starts (PubSub path) | **1 unit** (`videos.list`) |
+| Stream starts (Twitch fallback path) | **~101 units** (`search.list` + `videos.list`) |
+| Active session | **~600 units/hour** (`liveChatMessages.list` every 30s) |
 
-Expected daily usage: **< 20 units** even with multiple streams/day. A far cry from the original polling design's 288,000 units/day.
+Expected usage depends on stream length, but idle remains `0/day` and the fallback path only spends quota while Theo is actually live or being recovered.
 
 ---
 

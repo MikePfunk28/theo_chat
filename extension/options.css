@@ -110,6 +110,40 @@ body {
 }
 .intro__body a:hover { color: var(--ink); border-bottom-color: var(--ink); }
 
+/* ─── Lock rail ───────────────────────────────────────────── */
+
+.rail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.rail__cell {
+  background: var(--stage-deep);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail__key {
+  font-family: 'Syne', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--ink-dim);
+}
+
+.rail__val {
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
 /* ─── Form ───────────────────────────────────────────────── */
 
 .form {

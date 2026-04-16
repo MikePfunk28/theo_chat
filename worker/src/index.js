@@ -1,9 +1,6 @@
 // TheoChat — Cloudflare Worker
 // Serves t3yt.mikepfunk.com: landing, /api/config, /api/health, /privacy
 
-// Railway service WebSocket URL. Update here + redeploy if the service moves.
-const WS_URL = 'wss://theochat-production.up.railway.app';
-
 // GitHub Release URL for the signed .xpi — always points at the latest tagged release.
 // When you publish a new release with the .xpi attached, the download updates automatically.
 const DOWNLOAD_URL = 'https://github.com/MikePfunk28/theo_chat/releases/latest/download/theochat.xpi';
@@ -11,6 +8,7 @@ const DOWNLOAD_URL = 'https://github.com/MikePfunk28/theo_chat/releases/latest/d
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const runtime = getRuntimeConfig(env);
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -28,9 +26,8 @@ export default {
     }
 
     // Extension fetches this at startup to auto-discover the Railway WS URL.
-    // Set via: pnpm dlx wrangler secret put WS_URL
     if (url.pathname === '/api/config') {
-      return json({ wsUrl: WS_URL }, corsHeaders);
+      return json(runtime, corsHeaders);
     }
 
     // ── Pages ─────────────────────────────────────────────────
@@ -44,9 +41,16 @@ export default {
     }
 
     // Landing (default)
-    return html(landingPage());
+    return html(landingPage(runtime));
   },
 };
+
+function getRuntimeConfig(env) {
+  return {
+    wsUrl: env.WS_URL || '',
+    twitchChannel: (env.TWITCH_CHANNEL || 'theo').toLowerCase(),
+  };
+}
 
 function json(body, headers = {}) {
   return new Response(JSON.stringify(body), {
@@ -97,8 +101,8 @@ const WORDMARK = `<span class="wordmark"><span class="wordmark__t">THEO</span><s
 
 // ─── Landing page ──────────────────────────────────────────────
 
-function landingPage() {
-  const wsUrl = WS_URL;
+function landingPage(runtime) {
+  const wsUrl = runtime.wsUrl;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -203,27 +207,27 @@ footer .foot__links { display: flex; gap: 20px; }
 
   <section id="how">
     <p class="section__tag">HOW IT WORKS</p>
-    <h2 class="section__title">Push-based. Zero polling. Zero latency.</h2>
+    <h2 class="section__title">Push-first. Fallback-safe. Built for Theo.</h2>
     <div class="steps">
       <div class="step">
         <span class="step__num">01</span>
         <div class="step__body">
           <h3>YouTube goes live</h3>
-          <p>YouTube PubSub pushes a notification the instant the stream starts. No polling, no quota burn while idle.</p>
+          <p>YouTube PubSub pushes a notification the instant Theo goes live. If PubSub misses, Twitch live-state fallback can recover the bridge while a client is connected.</p>
         </div>
       </div>
       <div class="step">
         <span class="step__num">02</span>
         <div class="step__body">
           <h3>gRPC stream opens</h3>
-          <p>The service attaches to YouTube's live-chat gRPC stream. Messages, super chats, and moderation events arrive in real time.</p>
+          <p>The service attaches to YouTube's live-chat gRPC stream. Messages, super chats, and moderation events arrive in real time, with watchdog recovery if the stream goes stale.</p>
         </div>
       </div>
       <div class="step">
         <span class="step__num">03</span>
         <div class="step__body">
           <h3>Inject into Twitch DOM</h3>
-          <p>The browser extension renders each message inside the native Twitch chat with a YT badge. Mod deletions and bans sync instantly.</p>
+          <p>The browser extension renders each message inside the native Twitch chat with a YT badge. Mod deletions and bans sync immediately, with a 30-second fallback sweep while live.</p>
         </div>
       </div>
     </div>
