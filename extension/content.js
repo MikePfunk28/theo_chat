@@ -1,11 +1,25 @@
 // TheoChat — Content script for Twitch
-// Connects to the local TheoChat service and injects YouTube messages into Twitch chat
+// Connects to the TheoChat service and injects YouTube messages into Twitch chat.
+// Only activates on twitch.tv/theo — any other page is ignored entirely.
 
 (function () {
   'use strict';
 
+  // ─── Hard channel gate — extension only works on Theo's channel ─
+  const TARGET_TWITCH_CHANNEL = 'theo';
+
+  function isTargetChannelPage() {
+    if (location.hostname !== 'www.twitch.tv' && location.hostname !== 'twitch.tv') {
+      return false;
+    }
+    // Path should be /theo or /theo/... (about, videos, clips sub-pages on his channel are OK)
+    const path = location.pathname.toLowerCase();
+    return path === `/${TARGET_TWITCH_CHANNEL}` ||
+           path.startsWith(`/${TARGET_TWITCH_CHANNEL}/`) ||
+           path.startsWith(`/popout/${TARGET_TWITCH_CHANNEL}/`); // popout chat
+  }
+
   // ─── Configuration ────────────────────────────────────────────
-  // Default WS URL — overridden by extension options (stored in chrome.storage)
   const DEFAULT_WS_URL = 'ws://localhost:9300';
   const RECONNECT_DELAY = 3000;
   let WS_URL = DEFAULT_WS_URL;
@@ -255,12 +269,21 @@
     }
   }
 
+  const MAX_PENDING = 200;
+
   function queueOrInject(event) {
     if (DELAY_MS <= 0) {
       injectChatMessage(event);
       messagesToday++;
       lastMessageAt = Date.now();
       return;
+    }
+    // Cap the queue to avoid unbounded memory — drop oldest if full
+    if (pendingQueue.size >= MAX_PENDING) {
+      const oldestKey = pendingQueue.keys().next().value;
+      const oldest = pendingQueue.get(oldestKey);
+      if (oldest) clearTimeout(oldest.timerId);
+      pendingQueue.delete(oldestKey);
     }
     // Hold for DELAY_MS — gives mods a window to delete before it ever appears
     const timerId = setTimeout(() => {
@@ -416,14 +439,34 @@
   }
 
   // ─── Handle Page Navigation (Twitch is a SPA) ───────────────
+  // Disconnect the WS and clear DOM when Theo navigates away from his channel.
+  // Reactivate when he returns. Keeps extension inert on other pages.
+
+  function teardown() {
+    if (ws) { try { ws.close(1000, 'nav away'); } catch {} }
+    ws = null;
+    isConnected = false;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
+    pendingQueue.clear();
+    if (chatContainer) {
+      try { chatContainer.querySelectorAll('.theochat-msg').forEach((el) => el.remove()); } catch {}
+    }
+    chatContainer = null;
+  }
 
   let lastUrl = location.href;
   const urlObserver = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      console.log('[TheoChat] Page navigated, re-finding chat container...');
-      chatContainer = null;
-      waitForChatContainer();
+      if (isTargetChannelPage()) {
+        console.log('[TheoChat] On target channel — (re)initializing');
+        chatContainer = null;
+        waitForChatContainer();
+      } else {
+        console.log('[TheoChat] Navigated away from target channel — tearing down');
+        teardown();
+      }
     }
   });
   urlObserver.observe(document.body, { childList: true, subtree: true });
@@ -431,6 +474,10 @@
   // ─── Initialize ──────────────────────────────────────────────
 
   console.log('[TheoChat] Extension loaded');
+
+  // Note: storage settings are always loaded so that when the user NAVIGATES
+  // to twitch.tv/theo from elsewhere (SPA nav), activation is instant.
+  // But waitForChatContainer() is only called when we're on the target page.
 
   // Load WebSocket URL from extension storage, then start
   const CONFIG_URL = 'https://t3yt.mikepfunk.com/api/config';
@@ -461,8 +508,12 @@
         WS_TOKEN = result.wsToken || '';
         ENABLED = result.enabled !== false;
         DELAY_MS = Math.max(0, parseInt(result.delayMs, 10) || 0);
-        console.log(`[TheoChat] WebSocket URL: ${WS_URL} | enabled=${ENABLED} | delay=${DELAY_MS}ms`);
-        waitForChatContainer();
+        console.log(`[TheoChat] WS URL loaded: ${WS_URL} | enabled=${ENABLED} | delay=${DELAY_MS}ms`);
+        if (isTargetChannelPage()) {
+          waitForChatContainer();
+        } else {
+          console.log(`[TheoChat] Not on twitch.tv/${TARGET_TWITCH_CHANNEL} — extension inert (will activate on navigation)`);
+        }
       }
     );
 
@@ -503,7 +554,7 @@
         sendResponse({ ok: true });
       }
     });
-  } else {
+  } else if (isTargetChannelPage()) {
     waitForChatContainer();
   }
 

@@ -12,15 +12,32 @@ const VIDEO_ID = process.env.YOUTUBE_VIDEO_ID || '';
 const PORT = parseInt(process.env.PORT || '9300', 10);
 const WS_TOKEN = process.env.WS_TOKEN || '';
 // Auto-derive public URL from Railway env vars if not explicitly set.
-// Railway exposes RAILWAY_PUBLIC_DOMAIN (hostname only) and RAILWAY_STATIC_URL.
+// Always prepends https:// if missing, strips trailing slashes, validates result.
 function derivePublicUrl() {
-  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
-  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
-  if (process.env.RAILWAY_STATIC_URL) {
-    const u = process.env.RAILWAY_STATIC_URL;
-    return u.startsWith('http') ? u : `https://${u}`;
+  let raw = process.env.PUBLIC_URL
+         || process.env.RAILWAY_PUBLIC_DOMAIN
+         || process.env.RAILWAY_STATIC_URL
+         || '';
+  raw = String(raw).trim();
+  if (!raw) return '';
+  // Ensure https:// prefix
+  if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+    raw = 'https://' + raw;
   }
-  return '';
+  // Strip trailing slashes
+  raw = raw.replace(/\/+$/, '');
+  // Sanity: must look like a URL with at least one dot in the host
+  try {
+    const u = new URL(raw);
+    if (!u.hostname.includes('.')) {
+      console.warn(`  [PublicURL] Derived URL has suspicious hostname: ${raw}`);
+      return '';
+    }
+    return u.origin + u.pathname.replace(/\/+$/, '');
+  } catch {
+    console.warn(`  [PublicURL] Could not parse as URL: ${raw}`);
+    return '';
+  }
 }
 const PUBLIC_URL = derivePublicUrl();
 const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
@@ -111,8 +128,28 @@ function recordApiCall(cost, label) {
 
 function recordApiError(err, label) {
   metrics.apiErrors++;
-  metrics.lastApiError = { at: Date.now(), label, message: err.message || String(err) };
-  console.error(`  [API] ${label} error: ${err.message || err}`);
+  const msg = err.message || String(err);
+  metrics.lastApiError = { at: Date.now(), label, message: msg };
+  console.error(`  [API] ${label} error: ${msg}`);
+
+  // Detect daily quota exhaustion → mark counter maxed so we stop all optional API calls today
+  if (msg.includes('quotaExceeded') || msg.includes('exceeded your')) {
+    if (metrics.quotaUsedToday < QUOTA_DAILY_BUDGET) {
+      console.warn(`  [Quota] YouTube reports quotaExceeded — capping counter at budget`);
+      metrics.quotaUsedToday = QUOTA_DAILY_BUDGET;
+    }
+  }
+
+  // Detect per-minute rate limit → 5-min cooldown for this operation type
+  if (err.code === 8 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit') || err.status === 429) {
+    rateLimitCooldownUntil = Date.now() + 5 * 60 * 1000;
+    console.warn(`  [API] Rate limit detected — cooldown for 5 min`);
+  }
+}
+
+let rateLimitCooldownUntil = 0;
+function isInRateLimitCooldown() {
+  return Date.now() < rateLimitCooldownUntil;
 }
 
 // ─── YouTube REST API client (for stream discovery) ────────────
@@ -256,7 +293,11 @@ wss.on('connection', (ws, req) => {
     const n = (connByIp.get(ip) || 1) - 1;
     if (n <= 0) connByIp.delete(ip); else connByIp.set(ip, n);
     console.log(`  [WS] Client disconnected from ${ip} (${clientCount} total)`);
+    // If this was the last client, start the idle grace period
+    if (clientCount === 0) scheduleIdleShutdown();
   });
+  // If a client connects during a grace period, cancel the shutdown
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 });
 
 function broadcast(event) {
@@ -270,6 +311,24 @@ function broadcast(event) {
       client.send(data);
     }
   }
+}
+
+// ─── Idle shutdown — when no clients, close YouTube connection ─
+// Grace period of 60s lets Theo refresh/switch tabs without churn.
+const IDLE_GRACE_MS = 60 * 1000;
+let idleTimer = null;
+
+function scheduleIdleShutdown() {
+  if (idleTimer) return;
+  console.log(`  [Idle] No clients connected — scheduling gRPC close in ${IDLE_GRACE_MS / 1000}s`);
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    if (clientCount > 0) return; // someone reconnected — abort
+    if (isStreaming) {
+      console.log('  [Idle] Grace expired, no clients reconnected — stopping YouTube work');
+      isStreaming = false; // gRPC loop will exit on next iteration check
+    }
+  }, IDLE_GRACE_MS);
 }
 
 // Heartbeat ping every 30s so extensions can detect stale connections
@@ -303,14 +362,15 @@ async function checkIfLive(targetVideoId) {
   }
 
   const broadcastStatus = snippet.liveBroadcastContent;
-  const isActive = broadcastStatus === 'live' || broadcastStatus === 'upcoming';
+  // LIVE ONLY — not 'upcoming' (waiting room), not 'none' (ended/replay)
+  const isLive = broadcastStatus === 'live';
   const chatId = item.liveStreamingDetails?.activeLiveChatId;
 
-  if (isActive && chatId) {
-    console.log(`  [YT] ${broadcastStatus === 'upcoming' ? 'Waiting room' : 'Live'}: "${snippet.title}" (${targetVideoId})`);
+  if (isLive && chatId) {
+    console.log(`  [YT] Live: "${snippet.title}" (${targetVideoId})`);
     return chatId;
   }
-  console.log(`  [YT] ${targetVideoId} not active (liveBroadcastContent=${broadcastStatus})`);
+  console.log(`  [YT] ${targetVideoId} not live (liveBroadcastContent=${broadcastStatus})`);
   return null;
 }
 
@@ -327,7 +387,7 @@ async function startupDiscovery() {
 
   console.log(`  [YT] Startup check on channel ${CHANNEL_ID}...`);
   try {
-    // Search for both live AND upcoming (waiting room with active chat)
+    // LIVE ONLY — no waiting rooms, no upcoming, no replays
     recordApiCall(100, 'search.list(startup-live)');
     const response = await youtube.search.list({
       channelId: CHANNEL_ID,
@@ -335,20 +395,6 @@ async function startupDiscovery() {
       type: ['video'],
       part: ['id,snippet'],
     });
-
-    // If nothing live, also check for upcoming (waiting room)
-    if (!response.data.items?.length) {
-      recordApiCall(100, 'search.list(startup-upcoming)');
-      const upcomingRes = await youtube.search.list({
-        channelId: CHANNEL_ID,
-        eventType: 'upcoming',
-        type: ['video'],
-        part: ['id,snippet'],
-      });
-      if (upcomingRes.data.items?.length) {
-        response.data.items = upcomingRes.data.items;
-      }
-    }
     const live = response.data.items?.[0];
     if (!live) {
       console.log('  [YT] Not live at startup. Waiting for PubSub notifications...');
@@ -480,6 +526,8 @@ const messageTimestamps = new Map(); // messageId -> ts we broadcast it
 
 async function reconcileMessages() {
   if (!liveChatId || !isStreaming) return;
+  if (clientCount === 0) return; // nobody watching — don't burn quota on reconcile
+  if (isInRateLimitCooldown()) return;
 
   // Quota budget enforcement — skip reconcile when approaching ceiling
   if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
@@ -591,13 +639,15 @@ async function fetchEmojiLibrary(vid) {
 
 async function autoHealLiveCheck() {
   if (!CHANNEL_ID) return;
+  // Zero-quota idle: don't check YouTube when nobody's using the extension
+  if (clientCount === 0) { autoHealBackOff(); return; }
   if (isStreaming) {
-    // Already connected — reset to fast check for when stream ends
     autoHealInterval = AUTOHEAL_MIN_MS;
     return;
   }
 
   if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) { autoHealBackOff(); return; }
+  if (isInRateLimitCooldown()) { autoHealBackOff(); return; }
 
   try {
     // YouTube redirects /channel/X/live → /watch?v=LIVE_ID when live,
