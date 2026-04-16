@@ -589,6 +589,8 @@ async function autoHealLiveCheck() {
     return;
   }
 
+  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) { autoHealBackOff(); return; }
+
   try {
     const res = await fetch(`https://www.youtube.com/channel/${CHANNEL_ID}/live`, {
       redirect: 'follow',
@@ -597,18 +599,33 @@ async function autoHealLiveCheck() {
     if (!res.ok) { autoHealBackOff(); return; }
     const html = await res.text();
 
-    const videoMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
-    const liveMatch = html.match(/"isLiveContent":(true|false)/);
-    const isLiveNow = html.match(/"isLive":(true|false)/);
+    // Must contain our channel ID — skip if page is showing recommendations
+    if (!html.includes(CHANNEL_ID)) {
+      autoHealBackOff();
+      return;
+    }
 
-    if (!videoMatch) { autoHealBackOff(); return; }
-    const candidateId = videoMatch[1];
-    const looksLive = (liveMatch && liveMatch[1] === 'true') || (isLiveNow && isLiveNow[1] === 'true');
+    // Must have live indicators
+    if (!html.includes('"isLive":true') && !html.includes('"isLiveContent":true')) {
+      autoHealBackOff();
+      return;
+    }
 
-    if (!looksLive) { autoHealBackOff(); return; }
+    // Find a videoId near our channelId in the HTML (skip other channels' videos)
+    let candidateId = null;
+    const allVideos = [...html.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)];
+    for (const m of allVideos) {
+      const nearby = html.slice(Math.max(0, m.index - 300), m.index + 300);
+      if (nearby.includes(CHANNEL_ID)) {
+        candidateId = m[1];
+        break;
+      }
+    }
 
-    console.log(`  [AutoHeal] Detected live via HTML (interval was ${Math.round(autoHealInterval / 60000)}min): ${candidateId}`);
-    autoHealInterval = AUTOHEAL_MIN_MS; // reset to fast on detection
+    if (!candidateId) { autoHealBackOff(); return; }
+
+    console.log(`  [AutoHeal] Detected live for ${CHANNEL_ID} (interval=${Math.round(autoHealInterval / 60000)}min): ${candidateId}`);
+    autoHealInterval = AUTOHEAL_MIN_MS;
     await handleLiveCandidate(candidateId);
   } catch (err) {
     console.error(`  [AutoHeal] Check failed (non-fatal): ${err.message}`);
