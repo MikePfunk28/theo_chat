@@ -425,14 +425,17 @@ async function connectGrpcStream() {
     nextPageToken = '';
     broadcast({ type: 'yt.chat.ended' });
 
-    // If stream ended unexpectedly (not a clean shutdown), try reconnecting
-    // to the same video in case it was a transient gRPC error.
-    if (running && wasVideoId) {
-      console.log('  [YT] Attempting reconnect to same stream in 5 seconds...');
+    // If stream ended unexpectedly, try reconnecting ONCE after 10s.
+    // Stop if quota is near the ceiling — prevents death spiral.
+    if (running && wasVideoId && metrics.quotaUsedToday < QUOTA_RECONCILE_CEILING) {
+      console.log('  [YT] Attempting reconnect in 10 seconds...');
       setTimeout(async () => {
-        if (isStreaming) return; // something else already reconnected
+        if (isStreaming) return;
+        if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
+          console.warn('  [YT] Skipping reconnect — quota near ceiling');
+          return;
+        }
         try {
-          recordApiCall(1, 'videos.list(reconnect)');
           const chatId = await checkIfLive(wasVideoId);
           if (chatId) {
             videoId = wasVideoId;
@@ -445,9 +448,11 @@ async function connectGrpcStream() {
             console.log('  [YT] Stream no longer live — returning to idle.');
           }
         } catch (err) {
-          console.error('  [YT] Reconnect check failed:', err.message);
+          console.error('  [YT] Reconnect failed:', err.message);
         }
-      }, 5000);
+      }, 10000);
+    } else if (running && wasVideoId) {
+      console.warn('  [YT] NOT retrying — quota exhausted. Waiting for reset or manual trigger.');
     }
   }
 }
