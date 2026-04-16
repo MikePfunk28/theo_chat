@@ -592,38 +592,25 @@ async function autoHealLiveCheck() {
   if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) { autoHealBackOff(); return; }
 
   try {
+    // YouTube redirects /channel/X/live → /watch?v=LIVE_ID when live,
+    // → /channel/X (or similar) when NOT live. We only need the final URL.
     const res = await fetch(`https://www.youtube.com/channel/${CHANNEL_ID}/live`, {
       redirect: 'follow',
       headers: { 'User-Agent': 'Mozilla/5.0 TheoChatAutoheal/1.0' },
     });
     if (!res.ok) { autoHealBackOff(); return; }
-    const html = await res.text();
 
-    // Must contain our channel ID — skip if page is showing recommendations
-    if (!html.includes(CHANNEL_ID)) {
+    // Check where we landed
+    const finalUrl = res.url || '';
+    const watchMatch = finalUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+
+    if (!watchMatch) {
+      // Didn't redirect to a watch page → not live
       autoHealBackOff();
       return;
     }
 
-    // Must have live indicators
-    if (!html.includes('"isLive":true') && !html.includes('"isLiveContent":true')) {
-      autoHealBackOff();
-      return;
-    }
-
-    // Find a videoId near our channelId in the HTML (skip other channels' videos)
-    let candidateId = null;
-    const allVideos = [...html.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)];
-    for (const m of allVideos) {
-      const nearby = html.slice(Math.max(0, m.index - 300), m.index + 300);
-      if (nearby.includes(CHANNEL_ID)) {
-        candidateId = m[1];
-        break;
-      }
-    }
-
-    if (!candidateId) { autoHealBackOff(); return; }
-
+    const candidateId = watchMatch[1];
     console.log(`  [AutoHeal] Detected live for ${CHANNEL_ID} (interval=${Math.round(autoHealInterval / 60000)}min): ${candidateId}`);
     autoHealInterval = AUTOHEAL_MIN_MS;
     await handleLiveCandidate(candidateId);
