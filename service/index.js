@@ -293,14 +293,16 @@ async function checkIfLive(targetVideoId) {
   if (!item) return null;
 
   const snippet = item.snippet || {};
-  const isLive = snippet.liveBroadcastContent === 'live';
+  const broadcastStatus = snippet.liveBroadcastContent;
+  // Connect for both 'live' AND 'upcoming' (waiting room) — chat is active in both
+  const isActive = broadcastStatus === 'live' || broadcastStatus === 'upcoming';
   const chatId = item.liveStreamingDetails?.activeLiveChatId;
 
-  if (isLive && chatId) {
-    console.log(`  [YT] Live: "${snippet.title}" (${targetVideoId})`);
+  if (isActive && chatId) {
+    console.log(`  [YT] ${broadcastStatus === 'upcoming' ? 'Waiting room' : 'Live'}: "${snippet.title}" (${targetVideoId})`);
     return chatId;
   }
-  console.log(`  [YT] ${targetVideoId} not live (liveBroadcastContent=${snippet.liveBroadcastContent})`);
+  console.log(`  [YT] ${targetVideoId} not active (liveBroadcastContent=${broadcastStatus})`);
   return null;
 }
 
@@ -317,13 +319,28 @@ async function startupDiscovery() {
 
   console.log(`  [YT] Startup check on channel ${CHANNEL_ID}...`);
   try {
-    recordApiCall(100, 'search.list(startup)');
+    // Search for both live AND upcoming (waiting room with active chat)
+    recordApiCall(100, 'search.list(startup-live)');
     const response = await youtube.search.list({
       channelId: CHANNEL_ID,
       eventType: 'live',
       type: ['video'],
       part: ['id,snippet'],
     });
+
+    // If nothing live, also check for upcoming (waiting room)
+    if (!response.data.items?.length) {
+      recordApiCall(100, 'search.list(startup-upcoming)');
+      const upcomingRes = await youtube.search.list({
+        channelId: CHANNEL_ID,
+        eventType: 'upcoming',
+        type: ['video'],
+        part: ['id,snippet'],
+      });
+      if (upcomingRes.data.items?.length) {
+        response.data.items = upcomingRes.data.items;
+      }
+    }
     const live = response.data.items?.[0];
     if (!live) {
       console.log('  [YT] Not live at startup. Waiting for PubSub notifications...');
