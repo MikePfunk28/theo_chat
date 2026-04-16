@@ -293,8 +293,16 @@ async function checkIfLive(targetVideoId) {
   if (!item) return null;
 
   const snippet = item.snippet || {};
+
+  // HARD CHECK: reject any video not owned by our configured channel.
+  // Even if the upstream detector returned a wrong id (autoHeal, PubSub,
+  // manual webhook, anything), we refuse to connect to another channel.
+  if (CHANNEL_ID && snippet.channelId && snippet.channelId !== CHANNEL_ID) {
+    console.log(`  [YT] REJECT ${targetVideoId} — belongs to ${snippet.channelId}, not ${CHANNEL_ID}`);
+    return null;
+  }
+
   const broadcastStatus = snippet.liveBroadcastContent;
-  // Connect for both 'live' AND 'upcoming' (waiting room) — chat is active in both
   const isActive = broadcastStatus === 'live' || broadcastStatus === 'upcoming';
   const chatId = item.liveStreamingDetails?.activeLiveChatId;
 
