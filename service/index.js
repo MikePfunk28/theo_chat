@@ -145,6 +145,13 @@ const server = http.createServer((req, res) => {
       messagesDeleted: metrics.messagesDeleted,
     }));
   } else if (parsedUrl === '/metrics') {
+    // Gate metrics behind a token so operational data isn't publicly accessible
+    const metricsToken = process.env.METRICS_TOKEN || '';
+    if (metricsToken && reqUrl.searchParams.get('token') !== metricsToken) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ...metrics,
@@ -395,10 +402,36 @@ async function connectGrpcStream() {
       }
     }
   } finally {
+    const wasVideoId = videoId;
     isStreaming = false;
     liveChatId = null;
     nextPageToken = '';
     broadcast({ type: 'yt.chat.ended' });
+
+    // If stream ended unexpectedly (not a clean shutdown), try reconnecting
+    // to the same video in case it was a transient gRPC error.
+    if (running && wasVideoId) {
+      console.log('  [YT] Attempting reconnect to same stream in 5 seconds...');
+      setTimeout(async () => {
+        if (isStreaming) return; // something else already reconnected
+        try {
+          recordApiCall(1, 'videos.list(reconnect)');
+          const chatId = await checkIfLive(wasVideoId);
+          if (chatId) {
+            videoId = wasVideoId;
+            liveChatId = chatId;
+            connectGrpcStream().catch((err) => {
+              console.error('  [YT] Reconnect gRPC error:', err.message);
+              isStreaming = false;
+            });
+          } else {
+            console.log('  [YT] Stream no longer live — returning to idle.');
+          }
+        } catch (err) {
+          console.error('  [YT] Reconnect check failed:', err.message);
+        }
+      }, 5000);
+    }
   }
 }
 
@@ -702,11 +735,29 @@ async function main() {
   console.log('  ╚══════════════════════════════════════╝\n');
   console.log(`  [WS] Health check + WebSocket on port ${PORT}`);
 
-  // Subscribe to PubSub so YouTube pushes notifications when channel goes live
-  subscribeToPubSub().catch((err) => console.error('  [PubSub] setup error:', err.message));
+  // Subscribe to PubSub so YouTube pushes notifications when channel goes live.
+  // Retry every 5 min until successful, then renew every 4 days.
+  let pubsubVerified = false;
+  async function ensurePubSub() {
+    try {
+      await subscribeToPubSub();
+      pubsubVerified = true;
+    } catch (err) {
+      console.error('  [PubSub] setup error:', err.message);
+      pubsubVerified = false;
+    }
+  }
+  ensurePubSub();
 
-  // Renew subscription every 4 days (lease is 5 days)
-  setInterval(() => subscribeToPubSub().catch(() => {}), 4 * 24 * 60 * 60 * 1000);
+  setInterval(() => {
+    if (!pubsubVerified) {
+      console.log('  [PubSub] Retrying subscription (previous attempt failed)...');
+      ensurePubSub();
+    }
+  }, 5 * 60 * 1000); // retry every 5 min if not verified
+
+  // Also renew proactively every 4 days (lease is 5 days)
+  setInterval(() => ensurePubSub(), 4 * 24 * 60 * 60 * 1000);
 
   // One-time startup check in case stream is already live when we boot
   try {
