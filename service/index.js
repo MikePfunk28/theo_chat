@@ -239,6 +239,10 @@ wss.on('connection', (ws, req) => {
   metrics.wsConnectsLifetime++;
   console.log(`  [WS] Client connected from ${ip} (${clientCount} total)`);
   ws.send(JSON.stringify({ type: 'system.connected', text: 'TheoChat connected' }));
+  // Send current emoji library to new client so they can render custom emojis
+  if (Object.keys(emojiLibrary).length > 0) {
+    ws.send(JSON.stringify({ type: 'yt.emoji.library', emojis: emojiLibrary }));
+  }
 
   ws.on('close', () => {
     clientCount--;
@@ -337,6 +341,13 @@ async function handleLiveCandidate(candidateVideoId) {
   if (!chatId) return;
   videoId = candidateVideoId;
   liveChatId = chatId;
+
+  // Fetch custom emoji library for this stream (no quota cost)
+  fetchEmojiLibrary(videoId).then((map) => {
+    emojiLibrary = map;
+    broadcast({ type: 'yt.emoji.library', emojis: map });
+  });
+
   connectGrpcStream().catch((err) => {
     console.error('  [YT] gRPC error:', err.message);
     isStreaming = false;
@@ -453,6 +464,54 @@ setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
 // Scrapes YouTube's public /live HTML every 5 min when idle.
 // If Theo is live but PubSub never fired, we notice and connect within 5 min.
 const LIVE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+// ─── Emoji library scraper ─────────────────────────────────────
+// YouTube's v3 Data API doesn't expose custom emoji image URLs, but the
+// public live_chat HTML page embeds them in ytInitialData. We scrape it
+// once per stream and broadcast the shortcut → image URL map to clients.
+// Free, no quota.
+let emojiLibrary = {};
+
+async function walkForEmojis(obj, out) {
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    for (const v of obj) await walkForEmojis(v, out);
+    return;
+  }
+  // An emoji entry looks like: { emojiId, shortcuts: [":foo:"], image: { thumbnails: [{url}] }, isCustomEmoji: true }
+  if (Array.isArray(obj.shortcuts) && obj.image && Array.isArray(obj.image.thumbnails)) {
+    const url = obj.image.thumbnails[obj.image.thumbnails.length - 1]?.url;
+    if (url) {
+      for (const shortcut of obj.shortcuts) {
+        if (typeof shortcut === 'string') out[shortcut] = url;
+      }
+    }
+  }
+  for (const v of Object.values(obj)) await walkForEmojis(v, out);
+}
+
+async function fetchEmojiLibrary(vid) {
+  if (!vid) return {};
+  try {
+    const res = await fetch(`https://www.youtube.com/live_chat?v=${vid}&is_popout=1`, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en-US,en;q=0.9' },
+    });
+    if (!res.ok) return {};
+    const html = await res.text();
+    // Extract ytInitialData (YouTube's embedded app state JSON)
+    const m = html.match(/ytInitialData\s*=\s*({[\s\S]+?});\s*<\/script>/)
+          || html.match(/window\["ytInitialData"\]\s*=\s*({[\s\S]+?});/);
+    if (!m) return {};
+    const data = JSON.parse(m[1]);
+    const map = {};
+    await walkForEmojis(data, map);
+    console.log(`  [Emoji] Scraped ${Object.keys(map).length} custom emojis for video ${vid}`);
+    return map;
+  } catch (err) {
+    console.error(`  [Emoji] Scrape failed: ${err.message}`);
+    return {};
+  }
+}
 
 async function autoHealLiveCheck() {
   if (!CHANNEL_ID) return;

@@ -23,6 +23,10 @@
   // Each entry: { event, timerId, injectAt }
   const pendingQueue = new Map(); // messageId -> entry
 
+  // ─── Custom YouTube emoji library (shortcut → image URL) ──────
+  // Populated when service sends yt.emoji.library event.
+  let emojiLibrary = {};
+
   // ─── Defensive: catch-all so nothing we do can break Twitch chat ─
   function safe(fn, label) {
     try { return fn(); }
@@ -238,6 +242,16 @@
 
       case 'system.connected':
         break;
+
+      case 'yt.emoji.library':
+        if (event.emojis && typeof event.emojis === 'object') {
+          emojiLibrary = event.emojis;
+          console.log(`[TheoChat] Received ${Object.keys(emojiLibrary).length} custom emojis`);
+        }
+        break;
+
+      case 'system.heartbeat':
+        break;
     }
   }
 
@@ -278,12 +292,14 @@
     // YouTube badge
     el.appendChild(mkBadge('YT', 'theochat-badge', 'YouTube'));
 
-    // Role badges
+    // Role badges (order: owner > moderator > verified > member)
     for (const badge of event.badges) {
       if (badge === 'owner') {
         el.appendChild(mkBadge('Owner', 'theochat-badge theochat-badge-owner', 'Channel Owner'));
       } else if (badge === 'moderator') {
         el.appendChild(mkBadge('Mod', 'theochat-badge theochat-badge-moderator', 'Moderator'));
+      } else if (badge === 'verified') {
+        el.appendChild(mkBadge('✓', 'theochat-badge theochat-badge-verified', 'Verified'));
       } else if (badge === 'member') {
         el.appendChild(mkBadge('Member', 'theochat-badge theochat-badge-member', 'Member'));
       }
@@ -316,10 +332,10 @@
     sep.textContent = ': ';
     el.appendChild(sep);
 
-    // Message text
+    // Message text — render custom YouTube emoji shortcuts as <img>
     const body = document.createElement('span');
     body.className = 'theochat-text';
-    body.textContent = event.text;
+    renderMessageBody(body, event.text);
     el.appendChild(body);
 
     chatContainer.appendChild(el);
@@ -360,6 +376,30 @@
   }
 
   // ─── Utilities ───────────────────────────────────────────────
+
+  // Render a message body — scan for :shortcut: patterns and replace with
+  // <img> when we have a matching custom emoji. Plain text otherwise.
+  // Uses only textContent / appendChild — no innerHTML — so AMO-safe.
+  function renderMessageBody(parent, text) {
+    if (!text) return;
+    // Split text around :shortcut: patterns. Matches 1..50 chars, no spaces.
+    const parts = text.split(/(:[A-Za-z0-9_\-+]{1,50}:)/g);
+    for (const part of parts) {
+      if (!part) continue;
+      const isShortcut = /^:[A-Za-z0-9_\-+]{1,50}:$/.test(part);
+      if (isShortcut && emojiLibrary[part]) {
+        const img = document.createElement('img');
+        img.className = 'theochat-emoji';
+        img.src = emojiLibrary[part];
+        img.alt = part;
+        img.title = part;
+        img.loading = 'lazy';
+        parent.appendChild(img);
+      } else {
+        parent.appendChild(document.createTextNode(part));
+      }
+    }
+  }
 
   // Generate a consistent color for a username (similar to Twitch's approach)
   function getNameColor(name) {

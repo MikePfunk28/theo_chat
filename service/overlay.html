@@ -60,11 +60,12 @@
     line-height: 1;
     transform: translateY(-1px);
   }
-  .badge-yt     { background: var(--yt);     color: oklch(0.16 0.01 270); }
-  .badge-owner  { background: var(--owner);  color: oklch(0.16 0.01 270); }
-  .badge-mod    { background: var(--mod);    color: oklch(0.98 0.005 270); }
-  .badge-member { background: var(--member); color: oklch(0.16 0.01 270); }
-  .badge-sc     { background: var(--sc);     color: oklch(0.16 0.01 270); }
+  .badge-yt       { background: var(--yt);     color: oklch(0.16 0.01 270); }
+  .badge-owner    { background: var(--owner);  color: oklch(0.16 0.01 270); }
+  .badge-mod      { background: var(--mod);    color: oklch(0.98 0.005 270); }
+  .badge-verified { background: oklch(0.70 0.02 270); color: oklch(0.98 0.005 270); min-width: 14px; }
+  .badge-member   { background: var(--member); color: oklch(0.16 0.01 270); }
+  .badge-sc       { background: var(--sc);     color: oklch(0.16 0.01 270); }
 
   .avatar {
     width: 18px; height: 18px;
@@ -83,6 +84,7 @@
 
   .sep { color: var(--ink-muted); margin-right: 3px; }
   .body { font-weight: 500; }
+  .emoji { width: 22px; height: 22px; vertical-align: middle; margin: 0 1px; display: inline-block; }
 
   .system {
     font-family: 'Syne', sans-serif;
@@ -101,6 +103,7 @@
 <script>
   const MAX_MESSAGES = 50;
   const chat = document.getElementById('chat');
+  var emojiLibrary = {};
 
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token') || '';
@@ -135,6 +138,29 @@
       case 'yt.chat.ended':
         addSystem('YOUTUBE CHAT ENDED');
         break;
+      case 'yt.emoji.library':
+        if (event.emojis && typeof event.emojis === 'object') emojiLibrary = event.emojis;
+        break;
+    }
+  }
+
+  function renderMessageBody(parent, text) {
+    if (!text) return;
+    var parts = text.split(/(:[A-Za-z0-9_\-+]{1,50}:)/g);
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p) continue;
+      var isShortcut = /^:[A-Za-z0-9_\-+]{1,50}:$/.test(p);
+      if (isShortcut && emojiLibrary[p]) {
+        var img = document.createElement('img');
+        img.className = 'emoji';
+        img.src = emojiLibrary[p];
+        img.alt = p;
+        img.loading = 'lazy';
+        parent.appendChild(img);
+      } else {
+        parent.appendChild(document.createTextNode(p));
+      }
     }
   }
 
@@ -157,6 +183,7 @@
       var b = event.badges[i];
       if      (b === 'owner')     el.appendChild(createBadge('OWNER', 'badge-owner'));
       else if (b === 'moderator') el.appendChild(createBadge('MOD',   'badge-mod'));
+      else if (b === 'verified')  el.appendChild(createBadge('✓',     'badge-verified'));
       else if (b === 'member')    el.appendChild(createBadge('MEMBER','badge-member'));
     }
 
@@ -185,7 +212,7 @@
 
     var body = document.createElement('span');
     body.className = 'body';
-    body.textContent = event.text;
+    renderMessageBody(body, event.text);
     el.appendChild(body);
 
     chat.appendChild(el);
