@@ -4,7 +4,9 @@
   "description": "YouTube live chat bridge for Twitch — built for theo.gg",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test/",
+    "syntax-check": "node -c index.js && node -c event-log.js && node -c metrics-history.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.0",
