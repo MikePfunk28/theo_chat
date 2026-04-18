@@ -352,6 +352,16 @@ const server = http.createServer((req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
+  } else if (parsedUrl === '/stats') {
+    try {
+      const statsPath = require('path').join(__dirname, 'stats.html');
+      const html = fs.readFileSync(statsPath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch (err) {
+      res.writeHead(500);
+      res.end('Stats page not found');
+    }
   } else if (parsedUrl === '/overlay') {
     try {
       const html = fs.readFileSync(overlayPath, 'utf8');

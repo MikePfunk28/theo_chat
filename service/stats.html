@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TheoChat — Stats</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --stage: oklch(0.14 0.012 270);
+    --stage-raised: oklch(0.18 0.014 270);
+    --stage-deep: oklch(0.10 0.008 270);
+    --line: oklch(0.26 0.015 270);
+    --line-hot: oklch(0.42 0.02 270);
+    --ink: oklch(0.96 0.005 270);
+    --ink-muted: oklch(0.66 0.015 270);
+    --ink-dim: oklch(0.46 0.018 270);
+    --yt: oklch(0.64 0.24 28);
+    --tw: oklch(0.68 0.21 295);
+    --live: oklch(0.80 0.19 152);
+    --caution: oklch(0.80 0.17 85);
+    --err: oklch(0.68 0.22 25);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    font-family: 'Instrument Sans', system-ui, sans-serif;
+    font-size: 14px;
+    color: var(--ink);
+    background:
+      linear-gradient(180deg, oklch(0.14 0.018 270) 0%, var(--stage) 400px),
+      repeating-linear-gradient(90deg, transparent 0 95px, oklch(0.18 0.01 270 / 0.25) 95px 96px),
+      var(--stage);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1200px; margin: 0 auto; padding: 28px 28px 80px; }
+
+  header.head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .wordmark__dot {
+    width: 7px; height: 7px;
+    background: var(--yt);
+    border-radius: 50%;
+    margin: 0 3px 3px;
+    box-shadow: 0 0 10px oklch(0.64 0.24 28 / 0.6);
+  }
+  .head__meta {
+    display: flex;
+    gap: 18px;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    color: var(--ink-dim);
+    align-items: baseline;
+  }
+  .head__meta span b { color: var(--ink-muted); font-weight: 600; margin-left: 4px; }
+
+  .signals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin-top: 18px;
+  }
+  .signal {
+    background: var(--stage-deep);
+    padding: 14px 16px 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: relative;
+  }
+  .signal__led {
+    width: 8px; height: 8px;
+    background: var(--ink-dim);
+    border-radius: 50%;
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    transition: background 180ms cubic-bezier(.22,1,.36,1), box-shadow 180ms;
+  }
+  .signal__led[data-state="ok"] {
+    background: var(--live);
+    box-shadow: 0 0 10px oklch(0.80 0.19 152 / 0.7);
+  }
+  .signal__led[data-state="live"] {
+    background: var(--yt);
+    box-shadow: 0 0 12px oklch(0.64 0.24 28 / 0.8);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .signal__led[data-state="warn"] {
+    background: var(--caution);
+    box-shadow: 0 0 10px oklch(0.80 0.17 85 / 0.7);
+  }
+  .signal__led[data-state="err"] {
+    background: var(--err);
+    box-shadow: 0 0 10px oklch(0.68 0.22 25 / 0.7);
+  }
+  .signal__led[data-state="off"] { background: oklch(0.30 0.06 28); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .signal__label {
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: var(--ink-dim);
+  }
+  .signal__value {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .signal__note {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 11px;
+    color: var(--ink-muted);
+    line-height: 1.3;
+  }
+
+  .section {
+    margin-top: 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .section__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .section__title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+  .section__stamp {
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 0.08em;
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+  .tile {
+    background: var(--stage-deep);
+    padding: 14px 16px 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+  .tile__val {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 24px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  .tile__val--yt { color: var(--yt); }
+  .tile__val--tw { color: var(--tw); }
+  .tile__val--live { color: var(--live); }
+  .tile__val--warn { color: var(--caution); }
+  .tile__val--err { color: var(--err); }
+  .tile__key {
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    color: var(--ink-dim);
+  }
+
+  .chart {
+    padding: 20px 18px 14px;
+    background: var(--stage-raised);
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .chart__title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+  .chart__sub {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 12px;
+    color: var(--ink-dim);
+    line-height: 1.4;
+  }
+  .chart__body { min-height: 220px; width: 100%; }
+  .chart__body.is-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-dim);
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+  }
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 760px) { .chart-grid { grid-template-columns: 1fr; } }
+
+  .events {
+    background: var(--stage-deep);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .events__row {
+    display: grid;
+    grid-template-columns: 180px 140px 1fr;
+    gap: 16px;
+    padding: 10px 16px;
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 12px;
+    align-items: baseline;
+    border-bottom: 1px solid var(--line);
+  }
+  .events__row:last-child { border-bottom: none; }
+  .events__row--head {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--ink-dim);
+    background: var(--stage-raised);
+    text-transform: uppercase;
+  }
+  .events__when {
+    font-family: 'Syne', sans-serif;
+    font-weight: 500;
+    color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .events__kind {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--ink);
+  }
+  .events__kind[data-kind^="grpc"] { color: var(--yt); }
+  .events__kind[data-kind^="ws"] { color: var(--tw); }
+  .events__kind[data-kind^="mod"] { color: var(--live); }
+  .events__kind[data-kind^="quota"] { color: var(--caution); }
+  .events__detail {
+    color: var(--ink-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .auth {
+    max-width: 380px;
+    margin: 80px auto;
+    padding: 28px 28px 24px;
+    background: var(--stage-raised);
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .auth__title {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+  .auth__hint {
+    font-size: 12px;
+    color: var(--ink-muted);
+    line-height: 1.5;
+  }
+  .auth__input {
+    all: unset;
+    background: var(--stage-deep);
+    border: 1px solid var(--line-hot);
+    padding: 10px 12px;
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .auth__input:focus { outline: 2px solid var(--tw); outline-offset: 1px; }
+  .auth__btn {
+    all: unset;
+    cursor: pointer;
+    background: var(--stage);
+    border: 1px solid var(--line-hot);
+    padding: 10px 14px;
+    text-align: center;
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: var(--ink);
+    transition: background 140ms;
+  }
+  .auth__btn:hover { background: oklch(0.21 0.015 270); }
+
+  footer.foot {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--ink-dim);
+  }
+
+  .plot svg { overflow: visible; }
+  .plot text { fill: var(--ink-muted); font-family: 'Syne', sans-serif; font-size: 9px; letter-spacing: 0.06em; }
+  .plot [aria-label="y-axis tick label"] text,
+  .plot [aria-label="x-axis tick label"] text { fill: var(--ink-dim); }
+  .plot [aria-label="y-grid"] line,
+  .plot [aria-label="x-grid"] line { stroke: var(--line); stroke-opacity: 0.5; }
+</style>
+</head>
+<body>
+<main id="mainPanel">
+  <header class="head">
+    <h1 class="wordmark" aria-label="TheoChat stats">
+      <span>THEO</span><span class="wordmark__dot" aria-hidden="true"></span><span>CHAT</span>
+    </h1>
+    <div class="head__meta">
+      <span>CHANNEL<b id="channelMeta">—</b></span>
+      <span>VIDEO<b id="videoMeta">—</b></span>
+      <span>UPDATED<b id="updatedMeta">—</b></span>
+    </div>
+  </header>
+
+  <section class="signals" aria-label="Service signals">
+    <div class="signal">
+      <span class="signal__led" id="ledService" data-state="off"></span>
+      <span class="signal__label">SERVICE</span>
+      <span class="signal__value" id="valService">—</span>
+      <span class="signal__note" id="noteService">waiting for /health</span>
+    </div>
+    <div class="signal">
+      <span class="signal__led" id="ledYT" data-state="off"></span>
+      <span class="signal__label">YOUTUBE</span>
+      <span class="signal__value" id="valYT">—</span>
+      <span class="signal__note" id="noteYT">gRPC state unknown</span>
+    </div>
+    <div class="signal">
+      <span class="signal__led" id="ledWS" data-state="off"></span>
+      <span class="signal__label">CLIENTS</span>
+      <span class="signal__value" id="valWS">—</span>
+      <span class="signal__note" id="noteWS">ws subscribers</span>
+    </div>
+    <div class="signal">
+      <span class="signal__led" id="ledQuota" data-state="off"></span>
+      <span class="signal__label">QUOTA</span>
+      <span class="signal__value" id="valQuota">—</span>
+      <span class="signal__note" id="noteQuota">units today</span>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Session snapshot">
+    <div class="section__head">
+      <h2 class="section__title">Right now</h2>
+      <span class="section__stamp" id="uptimeStamp">uptime —</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span class="tile__val tile__val--yt" id="tileMsgs">0</span><span class="tile__key">MSGS RELAYED</span></div>
+      <div class="tile"><span class="tile__val" id="tileDeletes">0</span><span class="tile__key">DELETES MIRRORED</span></div>
+      <div class="tile"><span class="tile__val tile__val--live" id="tileRealtime">0</span><span class="tile__key">MOD ACTIONS (24h)</span></div>
+      <div class="tile"><span class="tile__val tile__val--warn" id="tileReconcile">0</span><span class="tile__key">RECONCILE RUNS</span></div>
+      <div class="tile"><span class="tile__val" id="tileGrpcOpens">0</span><span class="tile__key">GRPC OPENS (24h)</span></div>
+      <div class="tile"><span class="tile__val tile__val--err" id="tileGrpcErr">0</span><span class="tile__key">GRPC ERRORS</span></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Session charts">
+    <div class="section__head">
+      <h2 class="section__title">Session activity</h2>
+      <span class="section__stamp">last 24h · hourly buckets</span>
+    </div>
+    <div class="chart-grid">
+      <div class="chart">
+        <span class="chart__title">Messages relayed / hour</span>
+        <span class="chart__sub">Volume through the bridge. Pauses = quiet chat, not failure.</span>
+        <div class="chart__body plot" id="chartMessages"></div>
+      </div>
+      <div class="chart">
+        <span class="chart__title">Moderation actions / hour</span>
+        <span class="chart__sub">Mirrored YouTube mod events reflected on Twitch.</span>
+        <div class="chart__body plot" id="chartMod"></div>
+      </div>
+      <div class="chart">
+        <span class="chart__title">gRPC stream opens / hour</span>
+        <span class="chart__sub">Should stay at about 1 per broadcast. Spikes = regression of the 2026-04-17 reopen-churn bug.</span>
+        <div class="chart__body plot" id="chartGrpc"></div>
+      </div>
+      <div class="chart">
+        <span class="chart__title">Quota units burned / hour</span>
+        <span class="chart__sub">10k/day default from YouTube. 1200/hr budgeted at 15s reconcile.</span>
+        <div class="chart__body plot" id="chartQuota"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Service events">
+    <div class="section__head">
+      <h2 class="section__title">Recent events</h2>
+      <span class="section__stamp" id="eventsStamp">—</span>
+    </div>
+    <div class="events" role="table" aria-label="Recent service events">
+      <div class="events__row events__row--head" role="row">
+        <span role="columnheader">WHEN</span>
+        <span role="columnheader">KIND</span>
+        <span role="columnheader">DETAIL</span>
+      </div>
+      <div id="eventsList"></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span id="footLeft">TheoChat — stats page</span>
+    <span id="footRight">auto-refresh 30s</span>
+  </footer>
+</main>
+
+<div class="auth" id="authPanel" hidden>
+  <span class="auth__title">TOKEN REQUIRED</span>
+  <p class="auth__hint">Stats are gated behind <code>METRICS_TOKEN</code>. Paste the service's token to load. It's stored only in this browser's <code>localStorage</code>.</p>
+  <input id="authInput" class="auth__input" type="password" placeholder="metrics token" autocomplete="off" />
+  <button id="authGo" class="auth__btn">UNLOCK</button>
+</div>
+
+<script type="module">
+import * as Plot from 'https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.14/+esm';
+
+const TOKEN_KEY = 'theochat:stats:token';
+let token = localStorage.getItem(TOKEN_KEY) || new URLSearchParams(location.search).get('token') || '';
+
+const authPanel = document.getElementById('authPanel');
+const mainEl = document.getElementById('mainPanel');
+const authInput = document.getElementById('authInput');
+const authGo = document.getElementById('authGo');
+
+function showAuth() {
+  mainEl.style.display = 'none';
+  authPanel.hidden = false;
+  authInput.focus();
+}
+function hideAuth() {
+  authPanel.hidden = true;
+  mainEl.style.display = '';
+}
+authGo.addEventListener('click', () => {
+  const t = authInput.value.trim();
+  if (!t) return;
+  token = t;
+  localStorage.setItem(TOKEN_KEY, token);
+  hideAuth();
+  tick();
+});
+authInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') authGo.click(); });
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (res.status === 403) throw new Error('FORBIDDEN');
+  if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+  return res.json();
+}
+
+function fmtInt(n) {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 10_000) return (n / 1000).toFixed(1) + 'k';
+  if (n >= 1000) return n.toLocaleString('en-US');
+  return String(n);
+}
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('en-US', { hour12: false });
+}
+function fmtDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h) return h + 'h ' + m + 'm';
+  if (m) return m + 'm ' + ss + 's';
+  return ss + 's';
+}
+
+function setLed(id, state) {
+  const el = document.getElementById(id);
+  if (el) el.dataset.state = state;
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function renderPlot(target, rows, ykey, color, label) {
+  const el = document.getElementById(target);
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (!rows.length) {
+    el.classList.add('is-empty');
+    el.textContent = 'NO DATA YET';
+    return;
+  }
+  el.classList.remove('is-empty');
+  const data = rows.map((r) => ({ hour: new Date(r.hour), value: r[ykey] || 0 }));
+  const plot = Plot.plot({
+    height: 220,
+    marginLeft: 44,
+    marginBottom: 28,
+    x: { label: null, grid: false, tickFormat: (d) => {
+      const h = d.getUTCHours();
+      return h === 0 ? (d.getUTCMonth() + 1) + '/' + d.getUTCDate() : h + 'h';
+    }},
+    y: { label: label, grid: true, labelAnchor: 'top', labelOffset: 32, tickFormat: fmtInt },
+    style: { background: 'transparent', color: 'var(--ink-muted)' },
+    marks: [
+      Plot.ruleY([0], { stroke: 'var(--line-hot)', strokeWidth: 1 }),
+      Plot.areaY(data, { x: 'hour', y: 'value', fill: color, fillOpacity: 0.14 }),
+      Plot.lineY(data, { x: 'hour', y: 'value', stroke: color, strokeWidth: 1.5 }),
+      Plot.dot(data.filter((d) => d.value > 0), { x: 'hour', y: 'value', fill: color, r: 2 }),
+    ],
+  });
+  el.appendChild(plot);
+}
+
+function appendEventRow(list, when, kind, detail) {
+  const row = document.createElement('div');
+  row.className = 'events__row';
+  const w = document.createElement('span');
+  w.className = 'events__when';
+  w.textContent = when;
+  const k = document.createElement('span');
+  k.className = 'events__kind';
+  k.dataset.kind = kind;
+  k.textContent = kind;
+  const d = document.createElement('span');
+  d.className = 'events__detail';
+  d.textContent = detail;
+  row.appendChild(w);
+  row.appendChild(k);
+  row.appendChild(d);
+  list.appendChild(row);
+}
+
+async function tick() {
+  const q = token ? '?token=' + encodeURIComponent(token) : '';
+  try {
+    const sep = q ? '&' : '?';
+    const [health, historyResp] = await Promise.all([
+      fetchJson('/health'),
+      fetchJson('/api/metrics/history' + q + sep + 'window=24h'),
+    ]);
+    renderHealth(health);
+    renderHistory(historyResp.buckets || []);
+    renderEvents(historyResp.buckets || [], health);
+    setText('updatedMeta', fmtTime(Date.now()));
+  } catch (err) {
+    if (String(err.message).includes('FORBIDDEN')) {
+      showAuth();
+      return;
+    }
+    setText('updatedMeta', 'ERR');
+    setText('noteService', err.message);
+    setLed('ledService', 'err');
+  }
+}
+
+function renderHealth(h) {
+  setLed('ledService', h.status === 'ok' ? 'ok' : 'err');
+  setText('valService', h.status === 'ok' ? 'RELAYING' : 'DOWN');
+  setText('noteService', h.grpcHealthy ? 'gRPC healthy' : (h.streaming ? 'gRPC stale' : 'idle'));
+
+  if (h.streaming && h.grpcHealthy) { setLed('ledYT', 'live'); setText('valYT', 'LIVE'); }
+  else if (h.streaming) { setLed('ledYT', 'warn'); setText('valYT', 'STALE'); }
+  else if (h.pendingPubSubVideoId) { setLed('ledYT', 'warn'); setText('valYT', 'PENDING'); }
+  else { setLed('ledYT', 'off'); setText('valYT', 'IDLE'); }
+  setText('noteYT', h.videoId ? ('videoId ' + h.videoId) : 'no active video');
+
+  setLed('ledWS', h.clients > 0 ? 'ok' : 'off');
+  setText('valWS', String(h.clients == null ? 0 : h.clients));
+  setText('noteWS', h.clients > 0 ? 'ws subscribers' : 'no active ws clients');
+
+  const used = (h.quota && h.quota.usedToday) || 0;
+  const budget = (h.quota && h.quota.dailyBudget) || 9000;
+  const pctNum = budget ? Math.round((used / budget) * 100) : 0;
+  setLed('ledQuota', pctNum > 90 ? 'err' : pctNum > 75 ? 'warn' : 'ok');
+  setText('valQuota', fmtInt(used));
+  setText('noteQuota', pctNum + '% of ' + fmtInt(budget));
+
+  setText('channelMeta', h.liveChatId ? (h.liveChatId.slice(0, 16) + '…') : '—');
+  setText('videoMeta', h.videoId || '—');
+  setText('uptimeStamp', 'uptime ' + fmtDuration(h.uptime));
+
+  setText('tileMsgs', fmtInt(h.messagesRelayed));
+  setText('tileDeletes', fmtInt(h.messagesDeleted));
+}
+
+function renderHistory(buckets) {
+  const sum = (key) => buckets.reduce((a, b) => a + (b[key] || 0), 0);
+  setText('tileRealtime', fmtInt(sum('modActionsMirrored')));
+  setText('tileReconcile', fmtInt(sum('reconcileRuns')));
+  setText('tileGrpcOpens', fmtInt(sum('grpcOpens')));
+  setText('tileGrpcErr', fmtInt(sum('grpcErrors')));
+
+  renderPlot('chartMessages', buckets, 'messagesRelayed', 'var(--yt)', 'MSGS');
+  renderPlot('chartMod', buckets, 'modActionsMirrored', 'var(--live)', 'ACTIONS');
+  renderPlot('chartGrpc', buckets, 'grpcOpens', 'var(--caution)', 'OPENS');
+  renderPlot('chartQuota', buckets, 'quotaUnitsUsed', 'var(--tw)', 'UNITS');
+}
+
+function renderEvents(buckets, health) {
+  const list = document.getElementById('eventsList');
+  while (list.firstChild) list.removeChild(list.firstChild);
+  const recent = [...buckets].reverse().slice(0, 12);
+  if (!recent.length) {
+    appendEventRow(list, '—', 'empty', 'No events in the last 24h yet.');
+    return;
+  }
+  if (health.streaming) {
+    appendEventRow(list, fmtTime(health.lastGrpcActivityAt || Date.now()), 'grpc.live', 'streaming videoId ' + (health.videoId || '?'));
+  }
+  for (const b of recent) {
+    const parts = [];
+    if (b.grpcOpens) parts.push(b.grpcOpens + ' open' + (b.grpcOpens === 1 ? '' : 's'));
+    if (b.grpcErrors) parts.push(b.grpcErrors + ' error' + (b.grpcErrors === 1 ? '' : 's'));
+    if (b.messagesRelayed) parts.push(fmtInt(b.messagesRelayed) + ' msgs');
+    if (b.modActionsMirrored) parts.push(b.modActionsMirrored + ' mod');
+    if (b.quotaUnitsUsed) parts.push(b.quotaUnitsUsed + ' units');
+    if (!parts.length) continue;
+    const when = String(b.hour).slice(5, 16).replace('T', ' ');
+    appendEventRow(list, when, b.grpcErrors ? 'grpc.error' : 'grpc.hour', parts.join(' · '));
+  }
+  setText('eventsStamp', recent.length + ' hourly buckets');
+}
+
+tick();
+setInterval(tick, 30_000);
+</script>
+</body>
+</html>
