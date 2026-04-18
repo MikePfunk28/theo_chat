@@ -343,7 +343,12 @@ const server = http.createServer((req, res) => {
     }
     const windowParam = reqUrl.searchParams.get('window') || '7d';
     const windowMap = { '1h': 60 * 60 * 1000, '24h': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000, '30d': 30 * 24 * 60 * 60 * 1000 };
-    const windowMs = windowMap[windowParam] || windowMap['7d'];
+    if (!Object.prototype.hasOwnProperty.call(windowMap, windowParam)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'invalid window', allowed: Object.keys(windowMap) }));
+      return;
+    }
+    const windowMs = windowMap[windowParam];
     try {
       const rollup = getMetricsHistory(windowMs);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -480,9 +485,45 @@ wss.on('connection', (ws, req) => {
 });
 
 function broadcast(event) {
-  // Metrics
-  if (event.type === 'yt.message.created') metrics.messagesRelayed++;
-  else if (event.type === 'yt.message.deleted') metrics.messagesDeleted++;
+  // Metrics + persistent event log. Every relay path flows through here,
+  // so logging at this choke point means the rollups and /api/metrics/history
+  // actually have data to aggregate (the charts were "NO DATA YET"
+  // because message + mod events weren't instrumented).
+  if (event.type === 'yt.message.created') {
+    metrics.messagesRelayed++;
+    logEvent('message.relayed', {
+      author: event.displayName,
+      authorChannelId: event.userId,
+      messageLen: event.message ? event.message.length : 0,
+      badges: event.badges || [],
+      isSuperChat: Boolean(event.superChatAmount),
+    });
+    if (event.superChatAmount) {
+      logEvent('superchat', {
+        author: event.displayName,
+        amountText: event.superChatAmount,
+        currency: event.currency || null,
+        tierColor: event.superChatColor || null,
+      });
+    }
+  } else if (event.type === 'yt.message.deleted') {
+    metrics.messagesDeleted++;
+    logEvent('mod.action', {
+      type: 'delete',
+      source: 'youtube',
+      messageId: event.messageId,
+      mirrored: true,
+    });
+  } else if (event.type === 'yt.user.banned') {
+    logEvent('mod.action', {
+      type: 'ban',
+      source: 'youtube',
+      authorChannelId: event.userId,
+      author: event.displayName,
+      messagesRemoved: event.messagesRemoved || 0,
+      mirrored: true,
+    });
+  }
 
   const data = JSON.stringify(event);
   for (const client of wss.clients) {
@@ -778,8 +819,13 @@ async function connectGrpcStream() {
     console.log('  [YT] Stream closed by server — returning to finally for reconnect decision');
   } catch (err) {
     if (!running) return;
-    if (err.code === 0 || (err.message && err.message.includes('stream ended'))) {
-      console.log('  [YT] Stream ended — returning to idle. Waiting for next PubSub notification.');
+    // gRPC code 1 (CANCELLED) and any close where we set grpcStopReason
+    // ourselves are intentional shutdowns — not API errors. Routing those
+    // through recordApiError was inflating apiErrors / lastApiError and could
+    // engage the rate-limit cooldown on a clean idle/restart shutdown.
+    const isIntentionalStop = err.code === 1 || Boolean(grpcStopReason);
+    if (err.code === 0 || isIntentionalStop || (err.message && err.message.includes('stream ended'))) {
+      console.log(`  [YT] Stream closed (reason=${grpcStopReason || 'server-half-close'})`);
     } else {
       console.error(`  [YT] Stream error (code ${err.code}): ${err.message}`);
       // Route the error through recordApiError so rate-limit cooldowns
@@ -808,12 +854,12 @@ async function connectGrpcStream() {
     grpcStopReason = null;
     logEvent('grpc.closed', { reason: stopReason, durationMs, videoId: wasVideoId });
 
-    if (stopReason === 'restart') {
-      console.log('  [YT] Restarting gRPC stream after watchdog recovery');
-      scheduleReconnect(wasVideoId, 1000, stopReason);
-      return;
-    }
-
+    // Always run cleanup. Previously an early `return` inside `finally` for
+    // the 'restart' path skipped session.ended logging AND the
+    // clearTrackedMessages sweep — which re-introduced exactly the stale-id
+    // reconcile bug this block is meant to prevent. Instead: always log,
+    // always clear tracked messages, always null liveChatId, then branch on
+    // stopReason at the end to pick the reconnect cadence.
     logEvent('session.ended', {
       videoId: wasVideoId,
       durationMs,
@@ -823,21 +869,25 @@ async function connectGrpcStream() {
     });
 
     liveChatId = null;
-    // Clear tracked messages on every stream exit, not just non-reconnect
-    // exits. Stale IDs from the prior liveChatId otherwise trigger
-    // spurious reconcile-delete synthesis when the next stream's
-    // reconcile poll runs against a different messages list.
     clearTrackedMessages([...activeMessages.keys()]);
-    if (!shouldReconnect) {
+    if (!shouldReconnect && stopReason !== 'restart') {
       videoId = null;
       emojiLibrary = {};
     }
+
+    // Close the gRPC client so its HTTP/2 channel + keepalive timers are
+    // released deterministically. Without this, every reconnect accumulated
+    // a stale client and its keepalive PING timer over a long stream.
+    try { client.close(); } catch {}
 
     if (stopReason === 'idle' || stopReason === 'twitch-offline' || stopReason === 'stream-ended') {
       broadcast({ type: 'yt.chat.ended' });
     }
 
-    if (shouldReconnect) {
+    if (stopReason === 'restart') {
+      console.log('  [YT] Restarting gRPC stream after watchdog recovery');
+      scheduleReconnect(wasVideoId, 1000, stopReason);
+    } else if (shouldReconnect) {
       console.log('  [YT] Attempting reconnect in 10 seconds...');
       scheduleReconnect(wasVideoId, 10000, stopReason);
     } else if (running && wasVideoId && stopReason !== 'idle' && stopReason !== 'twitch-offline') {
@@ -1314,7 +1364,26 @@ async function main() {
 }
 
 // ─── Shutdown ──────────────────────────────────────────────────
-process.on('SIGINT', () => { running = false; shutdownEventLog(); wss.close(); server.close(); process.exit(0); });
-process.on('SIGTERM', () => { running = false; shutdownEventLog(); wss.close(); server.close(); process.exit(0); });
+// Graceful shutdown. writeStream.end() is async — the old handlers called it
+// and then raced process.exit(0), so the final burst of events (session.ended,
+// grpc.closed, ws.disconnected) was routinely lost. Now we stop accepting new
+// work, close sockets, then wait for the event log to finish flushing before
+// exiting.
+let shuttingDown = false;
+function gracefulExit(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`  [Shutdown] ${signal} received — draining...`);
+  running = false;
+  try { wss.close(); } catch {}
+  try { server.close(); } catch {}
+  // Safety net: if the flush hangs for any reason, force-exit after 5s so we
+  // don't leave an undead process in Railway's container.
+  const forceExit = setTimeout(() => process.exit(0), 5000);
+  forceExit.unref();
+  shutdownEventLog(() => process.exit(0));
+}
+process.on('SIGINT', () => gracefulExit('SIGINT'));
+process.on('SIGTERM', () => gracefulExit('SIGTERM'));
 
 main();

@@ -25,6 +25,8 @@ function emptyBucket(key) {
     messagesRelayed: 0,
     deletesRealtime: 0,
     deletesReconcile: 0,
+    modActionsDelete: 0,
+    modActionsBan: 0,
     modActionsMirrored: 0,
     quotaUnitsUsed: 0,
     wsConnects: 0,
@@ -33,6 +35,9 @@ function emptyBucket(key) {
     pubsubNotifications: 0,
     sessionsStarted: 0,
     sessionsEnded: 0,
+    superchatCount: 0,
+    uniqueAuthors: 0,
+    peakMsgsPerMinute: 0,
   };
 }
 
@@ -40,6 +45,12 @@ function buildRollup(windowMs) {
   const since = Date.now() - windowMs;
   const events = readEventsSince(since);
   const buckets = new Map();
+  // Side-structures for computed metrics that need per-bucket state during
+  // the scan (Sets for unique authors, per-minute counters for peak rate).
+  // Stored separately from the bucket object because they're not
+  // JSON-serializable.
+  const authorsPerBucket = new Map();
+  const perMinutePerBucket = new Map();
 
   for (const ev of events) {
     const k = hourKey(ev.ts);
@@ -47,14 +58,32 @@ function buildRollup(windowMs) {
     if (!bucket) {
       bucket = emptyBucket(k);
       buckets.set(k, bucket);
+      authorsPerBucket.set(k, new Set());
+      perMinutePerBucket.set(k, new Map());
     }
     switch (ev.kind) {
       case 'grpc.opened': bucket.grpcOpens++; break;
-      case 'grpc.closed': bucket.grpcCloses++; if (ev.reason && ev.reason.startsWith('error:')) bucket.grpcErrors++; break;
-      case 'message.relayed': bucket.messagesRelayed++; break;
+      case 'grpc.closed':
+        bucket.grpcCloses++;
+        if (ev.reason && ev.reason.startsWith('error:')) bucket.grpcErrors++;
+        break;
+      case 'message.relayed': {
+        bucket.messagesRelayed++;
+        // Unique authors
+        if (ev.author) authorsPerBucket.get(k).add(ev.author);
+        // Per-minute counter for peak-rate computation
+        const minuteKey = Math.floor(ev.ts / 60000);
+        const minMap = perMinutePerBucket.get(k);
+        minMap.set(minuteKey, (minMap.get(minuteKey) || 0) + 1);
+        break;
+      }
       case 'message.deleted.realtime': bucket.deletesRealtime++; break;
       case 'message.deleted.reconcile': bucket.deletesReconcile++; break;
-      case 'mod.action': if (ev.mirrored) bucket.modActionsMirrored++; break;
+      case 'mod.action':
+        if (ev.type === 'delete') bucket.modActionsDelete++;
+        else if (ev.type === 'ban') bucket.modActionsBan++;
+        if (ev.mirrored) bucket.modActionsMirrored++;
+        break;
       case 'quota.used': bucket.quotaUnitsUsed += (ev.cost || 0); break;
       case 'ws.connected': bucket.wsConnects++; break;
       case 'ws.disconnected': bucket.wsDisconnects++; break;
@@ -62,7 +91,17 @@ function buildRollup(windowMs) {
       case 'pubsub.notification': bucket.pubsubNotifications++; break;
       case 'session.started': bucket.sessionsStarted++; break;
       case 'session.ended': bucket.sessionsEnded++; break;
+      case 'superchat': bucket.superchatCount++; break;
     }
+  }
+
+  // Finalize the side-computed metrics into each bucket.
+  for (const [k, bucket] of buckets) {
+    bucket.uniqueAuthors = authorsPerBucket.get(k).size;
+    const minMap = perMinutePerBucket.get(k);
+    let peak = 0;
+    for (const count of minMap.values()) if (count > peak) peak = count;
+    bucket.peakMsgsPerMinute = peak;
   }
 
   return [...buckets.values()].sort((a, b) => a.hour.localeCompare(b.hour));

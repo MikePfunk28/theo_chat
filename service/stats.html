@@ -22,6 +22,11 @@
     --live: oklch(0.80 0.19 152);
     --caution: oklch(0.80 0.17 85);
     --err: oklch(0.68 0.22 25);
+    --sc: oklch(0.78 0.17 55);
+
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    --t-fast: 140ms;
+    --t-med: 220ms;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { color-scheme: dark; }
@@ -35,17 +40,18 @@
       var(--stage);
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
   }
   main { max-width: 1200px; margin: 0 auto; padding: 28px 28px 80px; }
 
+  /* ─── Header ────────────────────────────────────────────────── */
   header.head {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: baseline;
-    justify-content: space-between;
+    gap: 24px;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--line);
-    gap: 24px;
-    flex-wrap: wrap;
   }
   .wordmark {
     font-family: 'Syne', sans-serif;
@@ -64,21 +70,93 @@
     margin: 0 3px 3px;
     box-shadow: 0 0 10px oklch(0.64 0.24 28 / 0.6);
   }
+  .live-badge {
+    display: none;
+    justify-self: start;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    padding: 5px 10px 4px;
+    background: oklch(0.22 0.08 28);
+    border: 1px solid oklch(0.55 0.18 28);
+    color: var(--yt);
+  }
+  .live-badge[data-live="true"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .live-badge__dot {
+    width: 6px; height: 6px;
+    background: var(--yt);
+    border-radius: 50%;
+  }
   .head__meta {
     display: flex;
     gap: 18px;
+    justify-self: end;
     font-family: 'Syne', sans-serif;
     font-size: 10px;
     font-weight: 500;
     letter-spacing: 0.12em;
     color: var(--ink-dim);
     align-items: baseline;
+    flex-wrap: wrap;
   }
   .head__meta span b { color: var(--ink-muted); font-weight: 600; margin-left: 4px; }
+  .head__meta [data-state="stale"] b { color: var(--caution); }
+  .head__meta [data-state="err"] b { color: var(--err); }
 
+  /* ─── Error ribbon ──────────────────────────────────────────── */
+  .ribbon {
+    margin-top: 16px;
+    display: none;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: oklch(0.16 0.04 25);
+    border-top: 1px solid var(--err);
+    border-bottom: 1px solid var(--err);
+    font-size: 12px;
+  }
+  .ribbon[data-visible="true"] { display: grid; }
+  .ribbon__led {
+    width: 6px; height: 6px;
+    background: var(--err);
+    border-radius: 50%;
+    box-shadow: 0 0 8px oklch(0.68 0.22 25 / 0.6);
+  }
+  .ribbon__text {
+    color: var(--ink);
+    font-family: 'Instrument Sans', sans-serif;
+  }
+  .ribbon__text b {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--err);
+    margin-right: 8px;
+  }
+  .ribbon__btn {
+    all: unset;
+    cursor: pointer;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    padding: 4px 8px 3px;
+    border: 1px solid oklch(0.45 0.12 25);
+    color: var(--ink);
+  }
+  .ribbon__btn:hover { background: oklch(0.20 0.06 25); }
+
+  /* ─── Signal strip ──────────────────────────────────────────── */
   .signals {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 1px;
     background: var(--line);
     border: 1px solid var(--line);
@@ -99,7 +177,7 @@
     position: absolute;
     top: 14px;
     right: 14px;
-    transition: background 180ms cubic-bezier(.22,1,.36,1), box-shadow 180ms;
+    transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast);
   }
   .signal__led[data-state="ok"] {
     background: var(--live);
@@ -120,6 +198,10 @@
   }
   .signal__led[data-state="off"] { background: oklch(0.30 0.06 28); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .signal__led, .live-badge { animation: none !important; }
+    * { transition-duration: 0ms !important; }
+  }
   .signal__label {
     font-family: 'Syne', sans-serif;
     font-size: 10px;
@@ -133,8 +215,10 @@
     font-weight: 700;
     color: var(--ink);
     letter-spacing: 0.01em;
-    font-variant-numeric: tabular-nums;
   }
+  .signal__value[data-tone="warn"] { color: var(--caution); }
+  .signal__value[data-tone="err"] { color: var(--err); }
+  .signal__value[data-tone="live"] { color: var(--live); }
   .signal__note {
     font-family: 'Instrument Sans', sans-serif;
     font-size: 11px;
@@ -142,11 +226,12 @@
     line-height: 1.3;
   }
 
+  /* ─── Section scaffolding ───────────────────────────────────── */
   .section {
-    margin-top: 44px;
+    margin-top: 40px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 16px;
   }
   .section__head {
     display: flex;
@@ -154,6 +239,7 @@
     justify-content: space-between;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--line);
+    gap: 14px;
   }
   .section__title {
     font-family: 'Syne', sans-serif;
@@ -170,9 +256,10 @@
     letter-spacing: 0.08em;
   }
 
+  /* ─── Tiles ─────────────────────────────────────────────────── */
   .tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 1px;
     background: var(--line);
     border: 1px solid var(--line);
@@ -184,21 +271,27 @@
     flex-direction: column;
     gap: 4px;
     align-items: flex-start;
+    min-width: 0;
   }
   .tile__val {
     font-family: 'Syne', sans-serif;
     font-weight: 800;
     font-size: 24px;
     color: var(--ink);
-    font-variant-numeric: tabular-nums;
     letter-spacing: -0.01em;
     line-height: 1;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .tile__val--yt { color: var(--yt); }
   .tile__val--tw { color: var(--tw); }
   .tile__val--live { color: var(--live); }
   .tile__val--warn { color: var(--caution); }
   .tile__val--err { color: var(--err); }
+  .tile__val--sc { color: var(--sc); }
+  .tile__val--dim { color: var(--ink-muted); font-size: 18px; }
   .tile__key {
     font-family: 'Syne', sans-serif;
     font-weight: 600;
@@ -206,7 +299,32 @@
     letter-spacing: 0.16em;
     color: var(--ink-dim);
   }
+  .tile__sub {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 11px;
+    color: var(--ink-muted);
+    line-height: 1.3;
+    margin-top: 2px;
+  }
 
+  /* Skeleton shimmer for loading state */
+  .tiles[data-loading="true"] .tile__val,
+  .tiles[data-loading="true"] .tile__sub,
+  .signals[data-loading="true"] .signal__value {
+    color: transparent;
+    background: linear-gradient(90deg, var(--stage-raised) 0%, oklch(0.22 0.018 270) 50%, var(--stage-raised) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+    border-radius: 1px;
+  }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+  /* ─── Session-only row (live) ───────────────────────────────── */
+  .live-row { display: none; }
+  .live-row[data-live="true"] { display: flex; }
+  .live-row { flex-direction: column; gap: 16px; margin-top: 40px; }
+
+  /* ─── Charts ────────────────────────────────────────────────── */
   .chart {
     padding: 20px 18px 14px;
     background: var(--stage-raised);
@@ -214,6 +332,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0;
   }
   .chart__title {
     font-family: 'Syne', sans-serif;
@@ -229,15 +348,27 @@
     color: var(--ink-dim);
     line-height: 1.4;
   }
-  .chart__body { min-height: 220px; width: 100%; }
+  .chart__body { min-height: 220px; width: 100%; overflow: hidden; }
   .chart__body.is-empty {
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-direction: column;
+    gap: 6px;
     color: var(--ink-dim);
     font-family: 'Syne', sans-serif;
     font-size: 11px;
     letter-spacing: 0.14em;
+    text-align: center;
+  }
+  .chart__body.is-empty em {
+    font-style: normal;
+    color: var(--ink-muted);
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 12px;
+    letter-spacing: 0;
+    max-width: 44ch;
+    line-height: 1.4;
   }
   .chart-grid {
     display: grid;
@@ -246,6 +377,54 @@
   }
   @media (max-width: 760px) { .chart-grid { grid-template-columns: 1fr; } }
 
+  /* ─── Session timeline ──────────────────────────────────────── */
+  .timeline {
+    padding: 18px;
+    background: var(--stage-raised);
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .timeline__bar {
+    display: grid;
+    grid-auto-columns: 1fr;
+    grid-auto-flow: column;
+    height: 24px;
+    gap: 2px;
+    background: var(--stage-deep);
+  }
+  .timeline__seg {
+    background: var(--live);
+    opacity: 0.72;
+    transition: opacity var(--t-fast);
+    min-width: 4px;
+  }
+  .timeline__seg:hover { opacity: 1; }
+  .timeline__seg[data-rate="warn"] { background: var(--caution); }
+  .timeline__seg[data-rate="err"] { background: var(--err); }
+  .timeline__seg[data-rate="idle"] { background: oklch(0.22 0.012 270); opacity: 1; }
+  .timeline__legend {
+    display: flex;
+    gap: 18px;
+    font-family: 'Syne', sans-serif;
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    color: var(--ink-dim);
+  }
+  .timeline__legend i {
+    display: inline-block;
+    width: 8px; height: 8px;
+    margin-right: 6px;
+    vertical-align: middle;
+    font-style: normal;
+  }
+  .timeline__legend i[data-tone="ok"] { background: var(--live); }
+  .timeline__legend i[data-tone="warn"] { background: var(--caution); }
+  .timeline__legend i[data-tone="err"] { background: var(--err); }
+  .timeline__legend i[data-tone="idle"] { background: oklch(0.22 0.012 270); }
+
+  /* ─── Events feed ───────────────────────────────────────────── */
   .events {
     background: var(--stage-deep);
     border: 1px solid var(--line);
@@ -253,7 +432,7 @@
   }
   .events__row {
     display: grid;
-    grid-template-columns: 180px 140px 1fr;
+    grid-template-columns: 160px 130px 1fr;
     gap: 16px;
     padding: 10px 16px;
     font-family: 'Instrument Sans', sans-serif;
@@ -271,11 +450,13 @@
     background: var(--stage-raised);
     text-transform: uppercase;
   }
+  @media (max-width: 620px) {
+    .events__row { grid-template-columns: 100px 110px 1fr; gap: 10px; padding: 8px 12px; font-size: 11px; }
+  }
   .events__when {
     font-family: 'Syne', sans-serif;
     font-weight: 500;
     color: var(--ink-muted);
-    font-variant-numeric: tabular-nums;
   }
   .events__kind {
     font-family: 'Syne', sans-serif;
@@ -284,18 +465,22 @@
     letter-spacing: 0.06em;
     color: var(--ink);
   }
-  .events__kind[data-kind^="grpc"] { color: var(--yt); }
-  .events__kind[data-kind^="ws"] { color: var(--tw); }
-  .events__kind[data-kind^="mod"] { color: var(--live); }
-  .events__kind[data-kind^="quota"] { color: var(--caution); }
+  .events__kind[data-kind="grpc.live"]   { color: var(--live); }
+  .events__kind[data-kind="grpc.hour"]   { color: var(--yt); }
+  .events__kind[data-kind="grpc.error"]  { color: var(--err); }
+  .events__kind[data-kind="grpc.cancel"] { color: var(--ink-muted); }
+  .events__kind[data-kind="quota.ceil"]  { color: var(--caution); }
+  .events__kind[data-kind="rate.limit"]  { color: var(--caution); }
+  .events__kind[data-kind="session"]     { color: var(--tw); }
   .events__detail {
     color: var(--ink-muted);
     font-size: 11px;
-    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
+  /* ─── Auth panel ────────────────────────────────────────────── */
   .auth {
     max-width: 380px;
     margin: 80px auto;
@@ -306,17 +491,14 @@
     flex-direction: column;
     gap: 14px;
   }
+  .auth[hidden] { display: none; }
   .auth__title {
     font-family: 'Syne', sans-serif;
     font-size: 16px;
     font-weight: 800;
     letter-spacing: 0.02em;
   }
-  .auth__hint {
-    font-size: 12px;
-    color: var(--ink-muted);
-    line-height: 1.5;
-  }
+  .auth__hint { font-size: 12px; color: var(--ink-muted); line-height: 1.5; }
   .auth__input {
     all: unset;
     background: var(--stage-deep);
@@ -339,22 +521,41 @@
     font-weight: 700;
     letter-spacing: 0.18em;
     color: var(--ink);
-    transition: background 140ms;
+    transition: background var(--t-fast);
   }
   .auth__btn:hover { background: oklch(0.21 0.015 270); }
+  .auth__btn:focus-visible { outline: 2px solid var(--tw); outline-offset: 2px; }
 
+  /* ─── Footer ────────────────────────────────────────────────── */
   footer.foot {
-    margin-top: 64px;
+    margin-top: 56px;
     padding-top: 18px;
     border-top: 1px solid var(--line);
     display: flex;
     justify-content: space-between;
+    align-items: center;
     font-family: 'Syne', sans-serif;
     font-size: 10px;
     letter-spacing: 0.1em;
     color: var(--ink-dim);
+    gap: 12px;
+    flex-wrap: wrap;
   }
+  .foot__tick {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .foot__tick__dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--live);
+    transition: background var(--t-fast);
+  }
+  .foot__tick[data-state="fetching"] .foot__tick__dot { background: var(--caution); animation: pulse 1s ease-in-out infinite; }
+  .foot__tick[data-state="err"] .foot__tick__dot { background: var(--err); }
 
+  /* ─── Plot theming ──────────────────────────────────────────── */
   .plot svg { overflow: visible; }
   .plot text { fill: var(--ink-muted); font-family: 'Syne', sans-serif; font-size: 9px; letter-spacing: 0.06em; }
   .plot [aria-label="y-axis tick label"] text,
@@ -369,52 +570,98 @@
     <h1 class="wordmark" aria-label="TheoChat stats">
       <span>THEO</span><span class="wordmark__dot" aria-hidden="true"></span><span>CHAT</span>
     </h1>
+    <span class="live-badge" id="liveBadge" data-live="false" aria-live="polite">
+      <span class="live-badge__dot" aria-hidden="true"></span>
+      <span id="liveBadgeText">ON AIR</span>
+    </span>
     <div class="head__meta">
-      <span>CHANNEL<b id="channelMeta">—</b></span>
-      <span>VIDEO<b id="videoMeta">—</b></span>
-      <span>UPDATED<b id="updatedMeta">—</b></span>
+      <span id="channelMetaWrap">CHANNEL<b id="channelMeta">—</b></span>
+      <span id="videoMetaWrap">VIDEO<b id="videoMeta">—</b></span>
+      <span id="updatedMetaWrap">UPDATED<b id="updatedMeta">—</b></span>
     </div>
   </header>
 
-  <section class="signals" aria-label="Service signals">
+  <div class="ribbon" id="errRibbon" data-visible="false" role="alert">
+    <span class="ribbon__led" aria-hidden="true"></span>
+    <span class="ribbon__text"><b id="ribbonKind">ERROR</b><span id="ribbonText">—</span></span>
+    <button type="button" class="ribbon__btn" id="ribbonDismiss">DISMISS</button>
+  </div>
+
+  <section class="signals" aria-label="Service signals" id="signalsGrid">
     <div class="signal">
-      <span class="signal__led" id="ledService" data-state="off"></span>
+      <span class="signal__led" id="ledService" data-state="off" aria-label="Service state"></span>
       <span class="signal__label">SERVICE</span>
       <span class="signal__value" id="valService">—</span>
       <span class="signal__note" id="noteService">waiting for /health</span>
     </div>
     <div class="signal">
-      <span class="signal__led" id="ledYT" data-state="off"></span>
+      <span class="signal__led" id="ledYT" data-state="off" aria-label="YouTube stream state"></span>
       <span class="signal__label">YOUTUBE</span>
       <span class="signal__value" id="valYT">—</span>
       <span class="signal__note" id="noteYT">gRPC state unknown</span>
     </div>
     <div class="signal">
-      <span class="signal__led" id="ledWS" data-state="off"></span>
+      <span class="signal__led" id="ledWS" data-state="off" aria-label="WebSocket client state"></span>
       <span class="signal__label">CLIENTS</span>
       <span class="signal__value" id="valWS">—</span>
       <span class="signal__note" id="noteWS">ws subscribers</span>
     </div>
     <div class="signal">
-      <span class="signal__led" id="ledQuota" data-state="off"></span>
+      <span class="signal__led" id="ledQuota" data-state="off" aria-label="Quota usage state"></span>
       <span class="signal__label">QUOTA</span>
       <span class="signal__value" id="valQuota">—</span>
       <span class="signal__note" id="noteQuota">units today</span>
     </div>
+    <div class="signal">
+      <span class="signal__led" id="ledHeadroom" data-state="off" aria-label="Quota headroom state"></span>
+      <span class="signal__label">HEADROOM</span>
+      <span class="signal__value" id="valHeadroom">—</span>
+      <span class="signal__note" id="noteHeadroom">hours at current burn</span>
+    </div>
   </section>
 
-  <section class="section" aria-label="Session snapshot">
+  <section class="live-row" id="liveRow" data-live="false" aria-label="Current session">
     <div class="section__head">
-      <h2 class="section__title">Right now</h2>
-      <span class="section__stamp" id="uptimeStamp">uptime —</span>
+      <h2 class="section__title">This session</h2>
+      <span class="section__stamp" id="sessionStamp">—</span>
     </div>
     <div class="tiles">
-      <div class="tile"><span class="tile__val tile__val--yt" id="tileMsgs">0</span><span class="tile__key">MSGS RELAYED</span></div>
-      <div class="tile"><span class="tile__val" id="tileDeletes">0</span><span class="tile__key">DELETES MIRRORED</span></div>
-      <div class="tile"><span class="tile__val tile__val--live" id="tileRealtime">0</span><span class="tile__key">MOD ACTIONS (24h)</span></div>
-      <div class="tile"><span class="tile__val tile__val--warn" id="tileReconcile">0</span><span class="tile__key">RECONCILE RUNS</span></div>
-      <div class="tile"><span class="tile__val" id="tileGrpcOpens">0</span><span class="tile__key">GRPC OPENS (24h)</span></div>
-      <div class="tile"><span class="tile__val tile__val--err" id="tileGrpcErr">0</span><span class="tile__key">GRPC ERRORS</span></div>
+      <div class="tile"><span class="tile__val tile__val--live" id="sessLiveFor">—</span><span class="tile__key">LIVE FOR</span></div>
+      <div class="tile"><span class="tile__val" id="sessVelocity">—</span><span class="tile__key">MSGS / MIN</span></div>
+      <div class="tile"><span class="tile__val tile__val--yt" id="sessPeak">—</span><span class="tile__key">PEAK / MIN</span></div>
+      <div class="tile"><span class="tile__val tile__val--sc" id="sessSuperChat">—</span><span class="tile__key">SUPER CHATS</span></div>
+      <div class="tile"><span class="tile__val tile__val--tw" id="sessChatters">—</span><span class="tile__key">UNIQUE CHATTERS</span></div>
+      <div class="tile"><span class="tile__val tile__val--live" id="sessModMix">—</span><span class="tile__key">MOD ACTIONS</span><span class="tile__sub" id="sessModSub">del · ban</span></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Snapshot">
+    <div class="section__head">
+      <h2 class="section__title">Lifetime</h2>
+      <span class="section__stamp" id="uptimeStamp">uptime —</span>
+    </div>
+    <div class="tiles" id="snapshotTiles" data-loading="true">
+      <div class="tile"><span class="tile__val tile__val--yt" id="tileMsgs">—</span><span class="tile__key">MSGS RELAYED</span></div>
+      <div class="tile"><span class="tile__val" id="tileDeletes">—</span><span class="tile__key">DELETES MIRRORED</span></div>
+      <div class="tile"><span class="tile__val tile__val--live" id="tileModLive">—</span><span class="tile__key">MOD ACTIONS (24h)</span></div>
+      <div class="tile"><span class="tile__val tile__val--warn" id="tileReconcile">—</span><span class="tile__key">RECONCILE RUNS (24h)</span></div>
+      <div class="tile"><span class="tile__val" id="tileGrpcOpens">—</span><span class="tile__key">GRPC OPENS (24h)</span></div>
+      <div class="tile"><span class="tile__val tile__val--err" id="tileGrpcErr">—</span><span class="tile__key">GRPC ERRORS (24h)</span></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Insights">
+    <div class="section__head">
+      <h2 class="section__title">Insights</h2>
+      <span class="section__stamp">derived from the last 24h · updates every 30s</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span class="tile__val" id="insightHeat">—</span><span class="tile__key">CHAT HEAT</span><span class="tile__sub" id="insightHeatSub">relative to 24h baseline</span></div>
+      <div class="tile"><span class="tile__val tile__val--dim" id="insightPeak">—</span><span class="tile__key">PEAK HOUR (24h)</span><span class="tile__sub" id="insightPeakSub">when chat is hottest</span></div>
+      <div class="tile"><span class="tile__val" id="insightMod">—</span><span class="tile__key">MOD EFFORT</span><span class="tile__sub" id="insightModSub">actions per message</span></div>
+      <div class="tile"><span class="tile__val" id="insightReconcile">—</span><span class="tile__key">RECONCILE CATCH</span><span class="tile__sub" id="insightReconcileSub">safety-net effectiveness</span></div>
+      <div class="tile"><span class="tile__val" id="insightTrend">—</span><span class="tile__key">TREND</span><span class="tile__sub" id="insightTrendSub">session velocity direction</span></div>
+      <div class="tile"><span class="tile__val" id="insightHealth">—</span><span class="tile__key">GRPC HEALTH</span><span class="tile__sub" id="insightHealthSub">composite score 0–100</span></div>
     </div>
   </section>
 
@@ -426,23 +673,39 @@
     <div class="chart-grid">
       <div class="chart">
         <span class="chart__title">Messages relayed / hour</span>
-        <span class="chart__sub">Volume through the bridge. Pauses = quiet chat, not failure.</span>
+        <span class="chart__sub">Volume through the bridge. Dashed line = 24h median; pauses = quiet chat, not failure.</span>
         <div class="chart__body plot" id="chartMessages"></div>
       </div>
       <div class="chart">
         <span class="chart__title">Moderation actions / hour</span>
-        <span class="chart__sub">Mirrored YouTube mod events reflected on Twitch.</span>
+        <span class="chart__sub">Mirrored YouTube mod events reflected on Twitch. Deletes in green, bans in red.</span>
         <div class="chart__body plot" id="chartMod"></div>
       </div>
       <div class="chart">
         <span class="chart__title">gRPC stream opens / hour</span>
-        <span class="chart__sub">Should stay at about 1 per broadcast. Spikes = regression of the 2026-04-17 reopen-churn bug.</span>
+        <span class="chart__sub">Should stay at about 1 per broadcast. Amber zone = regression of the 2026-04-17 reopen-churn bug.</span>
         <div class="chart__body plot" id="chartGrpc"></div>
       </div>
       <div class="chart">
         <span class="chart__title">Quota units burned / hour</span>
         <span class="chart__sub">10k/day default from YouTube. 1200/hr budgeted at 15s reconcile.</span>
         <div class="chart__body plot" id="chartQuota"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Session timeline">
+    <div class="section__head">
+      <h2 class="section__title">Last 24 hours</h2>
+      <span class="section__stamp" id="timelineStamp">hourly buckets</span>
+    </div>
+    <div class="timeline">
+      <div class="timeline__bar" id="timelineBar" role="img" aria-label="Hourly activity ribbon"></div>
+      <div class="timeline__legend">
+        <span><i data-tone="ok"></i>CLEAN HOUR</span>
+        <span><i data-tone="warn"></i>RECONCILE SKIP</span>
+        <span><i data-tone="err"></i>ERRORS</span>
+        <span><i data-tone="idle"></i>IDLE</span>
       </div>
     </div>
   </section>
@@ -458,13 +721,16 @@
         <span role="columnheader">KIND</span>
         <span role="columnheader">DETAIL</span>
       </div>
-      <div id="eventsList"></div>
+      <div id="eventsList" role="rowgroup"></div>
     </div>
   </section>
 
   <footer class="foot">
     <span id="footLeft">TheoChat — stats page</span>
-    <span id="footRight">auto-refresh 30s</span>
+    <span class="foot__tick" id="footTick" data-state="ok" aria-live="polite">
+      <span class="foot__tick__dot" aria-hidden="true"></span>
+      <span id="footTickText">auto-refresh 30s</span>
+    </span>
   </footer>
 </main>
 
@@ -478,6 +744,7 @@
 <script type="module">
 import * as Plot from 'https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.14/+esm';
 
+// ─── Token handling ──────────────────────────────────────────
 const TOKEN_KEY = 'theochat:stats:token';
 let token = localStorage.getItem(TOKEN_KEY) || new URLSearchParams(location.search).get('token') || '';
 
@@ -505,54 +772,113 @@ authGo.addEventListener('click', () => {
 });
 authInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') authGo.click(); });
 
-async function fetchJson(url) {
-  const res = await fetch(url, { cache: 'no-store' });
-  if (res.status === 403) throw new Error('FORBIDDEN');
-  if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-  return res.json();
-}
-
+// ─── Formatters ──────────────────────────────────────────────
+const DASH = '—';
 function fmtInt(n) {
-  if (n == null) return '—';
+  if (n == null || isNaN(n)) return DASH;
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 10_000) return (n / 1000).toFixed(1) + 'k';
   if (n >= 1000) return n.toLocaleString('en-US');
   return String(n);
 }
 function fmtTime(ts) {
+  if (!ts) return DASH;
   const d = new Date(ts);
   return d.toLocaleTimeString('en-US', { hour12: false });
 }
 function fmtDuration(ms) {
-  if (!ms) return '—';
+  if (ms == null || ms < 0) return DASH;
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const ss = s % 60;
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    return d + 'd ' + (h % 24) + 'h';
+  }
   if (h) return h + 'h ' + m + 'm';
   if (m) return m + 'm ' + ss + 's';
   return ss + 's';
 }
+function fmtHours(h) {
+  if (h == null || !isFinite(h)) return '∞';
+  if (h < 1) return Math.round(h * 60) + 'm';
+  if (h < 10) return h.toFixed(1) + 'h';
+  return Math.round(h) + 'h';
+}
 
+// ─── DOM helpers ─────────────────────────────────────────────
 function setLed(id, state) {
   const el = document.getElementById(id);
   if (el) el.dataset.state = state;
 }
 function setText(id, text) {
   const el = document.getElementById(id);
-  if (el) el.textContent = text;
+  if (el && el.textContent !== text) el.textContent = text;
+}
+function setTone(id, tone) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (tone) el.dataset.tone = tone;
+  else delete el.dataset.tone;
 }
 
-function renderPlot(target, rows, ykey, color, label) {
+// ─── Fetch ───────────────────────────────────────────────────
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (res.status === 403) throw new Error('FORBIDDEN');
+  if (res.status === 400) {
+    let body = null;
+    try { body = await res.json(); } catch {}
+    throw new Error('400 ' + (body && body.error ? body.error : 'Bad Request'));
+  }
+  if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+  return res.json();
+}
+
+// ─── Plot rendering ──────────────────────────────────────────
+function renderPlot(target, rows, ykey, color, label, opts = {}) {
   const el = document.getElementById(target);
   while (el.firstChild) el.removeChild(el.firstChild);
-  if (!rows.length) {
+
+  const hasData = rows.length && rows.some((r) => (r[ykey] || 0) > 0);
+  if (!hasData) {
     el.classList.add('is-empty');
-    el.textContent = 'NO DATA YET';
+    const head = document.createElement('div');
+    head.textContent = 'NO DATA YET';
+    const sub = document.createElement('em');
+    sub.textContent = opts.emptyHint || 'events populate once a stream starts.';
+    el.appendChild(head);
+    el.appendChild(sub);
     return;
   }
   el.classList.remove('is-empty');
+
   const data = rows.map((r) => ({ hour: new Date(r.hour), value: r[ykey] || 0 }));
+  const values = data.map((d) => d.value).sort((a, b) => a - b);
+  const median = values[Math.floor(values.length / 2)] || 0;
+
+  const marks = [
+    Plot.ruleY([0], { stroke: 'var(--line-hot)', strokeWidth: 1 }),
+  ];
+  if (opts.warnBand) {
+    marks.push(Plot.areaY(data.map((d) => ({ hour: d.hour, lo: opts.warnBand, hi: Math.max(d.value, opts.warnBand) })),
+      { x: 'hour', y1: 'lo', y2: 'hi', fill: 'var(--caution)', fillOpacity: 0.08 }));
+  }
+  marks.push(
+    Plot.areaY(data, { x: 'hour', y: 'value', fill: color, fillOpacity: 0.14 }),
+    Plot.lineY(data, { x: 'hour', y: 'value', stroke: color, strokeWidth: 1.5 })
+  );
+  if (opts.showMedian && median > 0 && data.length >= 4) {
+    marks.push(Plot.ruleY([median], {
+      stroke: 'var(--ink-muted)',
+      strokeWidth: 1,
+      strokeDasharray: '3,3',
+      strokeOpacity: 0.6,
+    }));
+  }
+  marks.push(Plot.dot(data.filter((d) => d.value > 0), { x: 'hour', y: 'value', fill: color, r: 2 }));
+
   const plot = Plot.plot({
     height: 220,
     marginLeft: 44,
@@ -563,28 +889,107 @@ function renderPlot(target, rows, ykey, color, label) {
     }},
     y: { label: label, grid: true, labelAnchor: 'top', labelOffset: 32, tickFormat: fmtInt },
     style: { background: 'transparent', color: 'var(--ink-muted)' },
+    marks,
+  });
+  el.appendChild(plot);
+}
+
+function renderStackedMod(target, rows) {
+  const el = document.getElementById(target);
+  while (el.firstChild) el.removeChild(el.firstChild);
+
+  const hasData = rows.some((r) => (r.modActionsDelete || 0) + (r.modActionsBan || 0) > 0);
+  if (!hasData) {
+    el.classList.add('is-empty');
+    const head = document.createElement('div');
+    head.textContent = 'NO DATA YET';
+    const sub = document.createElement('em');
+    sub.textContent = 'mod events are logged as they arrive from YouTube.';
+    el.appendChild(head);
+    el.appendChild(sub);
+    return;
+  }
+  el.classList.remove('is-empty');
+
+  const data = rows.flatMap((r) => [
+    { hour: new Date(r.hour), type: 'delete', value: r.modActionsDelete || 0 },
+    { hour: new Date(r.hour), type: 'ban', value: r.modActionsBan || 0 },
+  ]);
+
+  const plot = Plot.plot({
+    height: 220,
+    marginLeft: 44,
+    marginBottom: 28,
+    x: { label: null, tickFormat: (d) => {
+      const h = d.getUTCHours();
+      return h === 0 ? (d.getUTCMonth() + 1) + '/' + d.getUTCDate() : h + 'h';
+    }},
+    y: { label: 'ACTIONS', grid: true, labelAnchor: 'top', labelOffset: 32, tickFormat: fmtInt },
+    color: { domain: ['delete', 'ban'], range: ['var(--live)', 'var(--err)'] },
+    style: { background: 'transparent', color: 'var(--ink-muted)' },
     marks: [
       Plot.ruleY([0], { stroke: 'var(--line-hot)', strokeWidth: 1 }),
-      Plot.areaY(data, { x: 'hour', y: 'value', fill: color, fillOpacity: 0.14 }),
-      Plot.lineY(data, { x: 'hour', y: 'value', stroke: color, strokeWidth: 1.5 }),
-      Plot.dot(data.filter((d) => d.value > 0), { x: 'hour', y: 'value', fill: color, r: 2 }),
+      Plot.rectY(data, Plot.binX({ y: 'sum' }, { x: 'hour', y: 'value', fill: 'type', interval: 'hour', fillOpacity: 0.85 })),
     ],
   });
   el.appendChild(plot);
 }
 
+// ─── Timeline ribbon ─────────────────────────────────────────
+function renderTimeline(buckets) {
+  const bar = document.getElementById('timelineBar');
+  while (bar.firstChild) bar.removeChild(bar.firstChild);
+  // Always show 24 hourly slots; fill gaps as idle
+  const now = new Date();
+  const hours = [];
+  for (let i = 23; i >= 0; i--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours() - i));
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    hours.push(`${yyyy}-${mm}-${dd}T${hh}:00:00Z`);
+  }
+  const byHour = new Map(buckets.map((b) => [b.hour, b]));
+
+  for (const hour of hours) {
+    const b = byHour.get(hour);
+    const seg = document.createElement('div');
+    seg.className = 'timeline__seg';
+    if (!b || (b.messagesRelayed === 0 && b.grpcOpens === 0)) {
+      seg.dataset.rate = 'idle';
+      seg.title = hour + ' · idle';
+    } else if (b.grpcErrors > 0) {
+      seg.dataset.rate = 'err';
+      seg.title = hour + ' · ' + b.grpcErrors + ' grpc errors';
+    } else if (b.grpcOpens > 2) {
+      seg.dataset.rate = 'warn';
+      seg.title = hour + ' · ' + b.grpcOpens + ' grpc opens (should be ≈1)';
+    } else {
+      seg.title = hour + ' · ' + fmtInt(b.messagesRelayed) + ' msgs · ' + b.grpcOpens + ' opens';
+    }
+    bar.appendChild(seg);
+  }
+  setText('timelineStamp', 'last 24 hourly buckets');
+}
+
+// ─── Events row builder ──────────────────────────────────────
 function appendEventRow(list, when, kind, detail) {
   const row = document.createElement('div');
   row.className = 'events__row';
+  row.setAttribute('role', 'row');
   const w = document.createElement('span');
   w.className = 'events__when';
+  w.setAttribute('role', 'cell');
   w.textContent = when;
   const k = document.createElement('span');
   k.className = 'events__kind';
   k.dataset.kind = kind;
+  k.setAttribute('role', 'cell');
   k.textContent = kind;
   const d = document.createElement('span');
   d.className = 'events__detail';
+  d.setAttribute('role', 'cell');
   d.textContent = detail;
   row.appendChild(w);
   row.appendChild(k);
@@ -592,7 +997,394 @@ function appendEventRow(list, when, kind, detail) {
   list.appendChild(row);
 }
 
+// ─── State derivation ────────────────────────────────────────
+let sessionStartedAtClientEst = null;
+let lastHealth = null;
+let lastStreamingState = null;
+
+function estimateSessionStart(health) {
+  // If streaming flipped on, capture the moment as session start. We do NOT
+  // rely on lastGrpcActivityAt because that moves on each message; the
+  // session start is when isStreaming first became true in the snapshot
+  // stream we observed. If we reload mid-session, fall back to
+  // lastGrpcActivityAt as a conservative lower bound on age.
+  if (health.streaming && !lastStreamingState) {
+    sessionStartedAtClientEst = Date.now();
+  } else if (!health.streaming) {
+    sessionStartedAtClientEst = null;
+  }
+  lastStreamingState = Boolean(health.streaming);
+  return sessionStartedAtClientEst || health.lastGrpcActivityAt || null;
+}
+
+// ─── Main render ─────────────────────────────────────────────
+function renderHealth(h) {
+  lastHealth = h;
+
+  setLed('ledService', h.status === 'ok' ? 'ok' : 'err');
+  setText('valService', h.status === 'ok' ? 'RELAYING' : 'DOWN');
+  if (h.status === 'ok') setTone('valService', 'live'); else setTone('valService', 'err');
+  setText('noteService', h.grpcHealthy ? 'gRPC healthy' : (h.streaming ? 'gRPC stale' : (h.clients > 0 ? 'ready, awaiting stream' : 'idle')));
+
+  if (h.streaming && h.grpcHealthy) { setLed('ledYT', 'live'); setText('valYT', 'LIVE'); setTone('valYT', 'live'); }
+  else if (h.streaming) { setLed('ledYT', 'warn'); setText('valYT', 'STALE'); setTone('valYT', 'warn'); }
+  else if (h.pendingPubSubVideoId) { setLed('ledYT', 'warn'); setText('valYT', 'PENDING'); setTone('valYT', 'warn'); }
+  else { setLed('ledYT', 'off'); setText('valYT', 'IDLE'); setTone('valYT', null); }
+  setText('noteYT', h.videoId ? ('videoId ' + h.videoId) : (h.pendingPubSubVideoId ? 'cached candidate' : 'no active video'));
+
+  setLed('ledWS', h.clients > 0 ? 'ok' : 'off');
+  setText('valWS', String(h.clients == null ? 0 : h.clients));
+  setText('noteWS', h.clients > 0 ? (h.clients === 1 ? 'ws subscriber' : 'ws subscribers') : 'no active ws clients');
+
+  const used = (h.quota && h.quota.usedToday) || 0;
+  const budget = (h.quota && h.quota.dailyBudget) || 9000;
+  const pctNum = budget ? Math.round((used / budget) * 100) : 0;
+  setLed('ledQuota', pctNum > 90 ? 'err' : pctNum > 75 ? 'warn' : 'ok');
+  setText('valQuota', fmtInt(used));
+  setTone('valQuota', pctNum > 90 ? 'err' : pctNum > 75 ? 'warn' : null);
+  setText('noteQuota', pctNum + '% of ' + fmtInt(budget));
+
+  // Live badge
+  const live = document.getElementById('liveBadge');
+  if (h.streaming) live.dataset.live = 'true'; else live.dataset.live = 'false';
+  setText('liveBadgeText', h.streaming ? 'ON AIR' : 'OFF AIR');
+
+  // Meta
+  setText('channelMeta', h.liveChatId ? (h.liveChatId.slice(0, 18) + '…') : DASH);
+  setText('videoMeta', h.videoId || DASH);
+  setText('uptimeStamp', 'uptime ' + fmtDuration(h.uptime));
+
+  // Error ribbon
+  const ribbon = document.getElementById('errRibbon');
+  const err = h.lastApiError;
+  if (err && err.at && (Date.now() - err.at < 10 * 60 * 1000) && !ribbonDismissed) {
+    ribbon.dataset.visible = 'true';
+    setText('ribbonKind', (err.label || 'error').toUpperCase());
+    setText('ribbonText', err.message + ' · ' + fmtDuration(Date.now() - err.at) + ' ago');
+  } else {
+    ribbon.dataset.visible = 'false';
+  }
+}
+
+function renderHistory(buckets) {
+  const snapTiles = document.getElementById('snapshotTiles');
+  snapTiles.dataset.loading = 'false';
+
+  const sum = (key) => buckets.reduce((a, b) => a + (b[key] || 0), 0);
+  const modActions = sum('modActionsMirrored');
+  const grpcOpens = sum('grpcOpens');
+  const grpcErrors = sum('grpcErrors');
+
+  setText('tileMsgs', fmtInt(lastHealth ? lastHealth.messagesRelayed : null));
+  setText('tileDeletes', fmtInt(lastHealth ? lastHealth.messagesDeleted : null));
+  setText('tileModLive', fmtInt(modActions));
+  setText('tileReconcile', fmtInt(sum('reconcileRuns')));
+  setText('tileGrpcOpens', fmtInt(grpcOpens));
+  setText('tileGrpcErr', fmtInt(grpcErrors));
+
+  // Quota headroom signal (needs buckets for burn rate)
+  renderQuotaHeadroom(buckets);
+
+  // Charts
+  renderPlot('chartMessages', buckets, 'messagesRelayed', 'var(--yt)', 'MSGS', { showMedian: true });
+  renderStackedMod('chartMod', buckets);
+  renderPlot('chartGrpc', buckets, 'grpcOpens', 'var(--caution)', 'OPENS', {
+    warnBand: 2,
+    emptyHint: 'one stream open per broadcast is normal. spikes here mean the reopen-churn bug is back.',
+  });
+  renderPlot('chartQuota', buckets, 'quotaUnitsUsed', 'var(--tw)', 'UNITS', { showMedian: true });
+
+  // Live-session tiles (derived from buckets that contain current streaming activity)
+  renderLiveSession(buckets);
+
+  // Timeline ribbon
+  renderTimeline(buckets);
+
+  // Insights — derived metrics, known algorithms, actionable one-liners
+  renderInsights(buckets);
+
+  // Events list
+  renderEvents(buckets);
+}
+
+// ─── Insights ────────────────────────────────────────────────
+// All math is computed client-side from the same rollup already on the
+// wire. No extra server work, no extra requests. Each tile is one
+// well-known statistic with a plain-English interpretation.
+
+function mean(values) {
+  if (!values.length) return 0;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+function stddev(values, mu) {
+  if (values.length < 2) return 0;
+  const variance = values.reduce((a, b) => a + (b - mu) * (b - mu), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function renderInsights(buckets) {
+  const msgs = buckets.map((b) => b.messagesRelayed || 0);
+  const hasActivity = msgs.some((m) => m > 0);
+
+  // 1. Chat heat — z-score of latest active hour vs 24h mean+stddev.
+  //    Actionable: "chat is unusually hot/cold right now."
+  if (hasActivity && msgs.length >= 3) {
+    const recent = msgs[msgs.length - 1];
+    const baseline = msgs.slice(0, -1);
+    const mu = mean(baseline);
+    const sigma = stddev(baseline, mu);
+    if (sigma > 0) {
+      const z = (recent - mu) / sigma;
+      const label = z > 1.5 ? 'HOT' : z < -1.5 ? 'COLD' : 'NORMAL';
+      setText('insightHeat', label);
+      const tone = z > 1.5 ? 'err' : z < -1.5 ? 'warn' : 'live';
+      document.getElementById('insightHeat').className = 'tile__val tile__val--' + tone;
+      setText('insightHeatSub', z.toFixed(1) + 'σ vs 24h · ' + fmtInt(recent) + ' msgs now vs ' + fmtInt(Math.round(mu)) + ' avg');
+    } else {
+      setText('insightHeat', 'STEADY');
+      document.getElementById('insightHeat').className = 'tile__val tile__val--live';
+      setText('insightHeatSub', 'too little variance to compute z-score');
+    }
+  } else {
+    setText('insightHeat', DASH);
+    document.getElementById('insightHeat').className = 'tile__val tile__val--dim';
+    setText('insightHeatSub', 'needs at least 3 hours of data');
+  }
+
+  // 2. Peak hour — which hour in the last 24 had the most messages.
+  //    Actionable: "schedule around your peak engagement time."
+  if (hasActivity) {
+    let peakIdx = -1, peakMsgs = 0;
+    for (let i = 0; i < buckets.length; i++) {
+      if ((buckets[i].messagesRelayed || 0) > peakMsgs) { peakMsgs = buckets[i].messagesRelayed; peakIdx = i; }
+    }
+    if (peakIdx >= 0) {
+      const d = new Date(buckets[peakIdx].hour);
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      setText('insightPeak', hh + ':00');
+      setText('insightPeakSub', fmtInt(peakMsgs) + ' msgs · ' + (buckets[peakIdx].uniqueAuthors || 0) + ' chatters · UTC');
+    } else {
+      setText('insightPeak', DASH);
+      setText('insightPeakSub', 'no messages in 24h');
+    }
+  } else {
+    setText('insightPeak', DASH);
+    setText('insightPeakSub', 'no messages in 24h');
+  }
+
+  // 3. Mod effort — actions per message ratio, expressed as 1-in-N.
+  //    Actionable: "is chat clean enough to mod alone?"
+  const totalMsgs = msgs.reduce((a, b) => a + b, 0);
+  const totalMod = buckets.reduce((a, b) => a + (b.modActionsMirrored || 0), 0);
+  if (totalMsgs > 0 && totalMod > 0) {
+    const oneIn = Math.round(totalMsgs / totalMod);
+    setText('insightMod', '1 : ' + fmtInt(oneIn));
+    const tone = oneIn < 50 ? 'err' : oneIn < 200 ? 'warn' : 'live';
+    document.getElementById('insightMod').className = 'tile__val tile__val--' + tone;
+    setText('insightModSub', totalMod + ' actions over ' + fmtInt(totalMsgs) + ' msgs · lower = more scrubbing');
+  } else if (totalMsgs > 0) {
+    setText('insightMod', 'CLEAN');
+    document.getElementById('insightMod').className = 'tile__val tile__val--live';
+    setText('insightModSub', 'no mod actions in 24h across ' + fmtInt(totalMsgs) + ' msgs');
+  } else {
+    setText('insightMod', DASH);
+    document.getElementById('insightMod').className = 'tile__val tile__val--dim';
+    setText('insightModSub', 'awaiting activity');
+  }
+
+  // 4. Reconcile catch — what fraction of deletes came via reconcile sweep
+  //    vs real-time gRPC. High = gRPC is missing events.
+  //    Actionable: if reconcile catch is high, moderation latency is >90s
+  //    for those messages, investigate gRPC event completeness.
+  const rtDel = buckets.reduce((a, b) => a + (b.deletesRealtime || 0), 0);
+  const rcDel = buckets.reduce((a, b) => a + (b.deletesReconcile || 0), 0);
+  const totalDel = rtDel + rcDel;
+  if (totalDel > 0) {
+    const pct = Math.round((rtDel / totalDel) * 100);
+    setText('insightReconcile', pct + '% live');
+    const tone = pct > 90 ? 'live' : pct > 70 ? 'warn' : 'err';
+    document.getElementById('insightReconcile').className = 'tile__val tile__val--' + tone;
+    const interp = pct > 90 ? 'gRPC events arriving cleanly' : pct > 70 ? 'safety net catching some gaps' : 'gRPC missing events — investigate';
+    setText('insightReconcileSub', rtDel + ' live · ' + rcDel + ' reconcile · ' + interp);
+  } else {
+    setText('insightReconcile', DASH);
+    document.getElementById('insightReconcile').className = 'tile__val tile__val--dim';
+    setText('insightReconcileSub', 'no deletes in 24h to evaluate');
+  }
+
+  // 5. Trend — linear regression slope on msgs/hour over the session.
+  //    Actionable: is engagement accelerating or decaying?
+  //    Uses ordinary least squares on (hour index, msgs).
+  if (hasActivity && buckets.length >= 4) {
+    const xs = buckets.map((_, i) => i);
+    const xMean = mean(xs);
+    const yMean = mean(msgs);
+    let num = 0, den = 0;
+    for (let i = 0; i < xs.length; i++) {
+      num += (xs[i] - xMean) * (msgs[i] - yMean);
+      den += (xs[i] - xMean) * (xs[i] - xMean);
+    }
+    const slope = den > 0 ? num / den : 0;
+    const pctPerHour = yMean > 0 ? (slope / yMean) * 100 : 0;
+    if (Math.abs(pctPerHour) < 3) {
+      setText('insightTrend', 'STEADY');
+      document.getElementById('insightTrend').className = 'tile__val tile__val--live';
+      setText('insightTrendSub', slope.toFixed(1) + ' msgs/hr · flat baseline');
+    } else if (pctPerHour > 0) {
+      setText('insightTrend', '+' + Math.round(pctPerHour) + '%/hr');
+      document.getElementById('insightTrend').className = 'tile__val tile__val--live';
+      setText('insightTrendSub', 'accelerating · ' + (slope > 0 ? '+' : '') + Math.round(slope) + ' msgs/hr slope');
+    } else {
+      setText('insightTrend', Math.round(pctPerHour) + '%/hr');
+      document.getElementById('insightTrend').className = 'tile__val tile__val--warn';
+      setText('insightTrendSub', 'decaying · ' + Math.round(slope) + ' msgs/hr slope');
+    }
+  } else {
+    setText('insightTrend', DASH);
+    document.getElementById('insightTrend').className = 'tile__val tile__val--dim';
+    setText('insightTrendSub', 'needs at least 4 hours of data');
+  }
+
+  // 6. gRPC health score — composite 0-100.
+  //    Penalties: errors per open, opens > 1 per broadcast, reconcile-catch
+  //    ratio too high (lost events), rate-limit hits.
+  //    Simple formula: 100 - (errPct×50) - (openExcess×10) - (reconcileLoss×20)
+  const totalOpens = buckets.reduce((a, b) => a + (b.grpcOpens || 0), 0);
+  const totalErr = buckets.reduce((a, b) => a + (b.grpcErrors || 0), 0);
+  const sessions = buckets.reduce((a, b) => a + (b.sessionsStarted || 0), 0);
+  if (totalOpens === 0) {
+    setText('insightHealth', DASH);
+    document.getElementById('insightHealth').className = 'tile__val tile__val--dim';
+    setText('insightHealthSub', 'no streams in 24h to score');
+  } else {
+    const errPct = totalOpens > 0 ? totalErr / totalOpens : 0;
+    // "Excess" opens: if we had 3 sessions and 15 opens, excess = 12 (should be ~3)
+    const expectedOpens = Math.max(1, sessions);
+    const openExcess = Math.max(0, (totalOpens - expectedOpens) / expectedOpens);
+    const reconcileLoss = totalDel > 0 ? rcDel / totalDel : 0;
+    const score = Math.max(0, Math.min(100, Math.round(
+      100 - (errPct * 50) - (openExcess * 10) - (reconcileLoss * 20)
+    )));
+    setText('insightHealth', String(score));
+    const tone = score >= 90 ? 'live' : score >= 70 ? 'warn' : 'err';
+    document.getElementById('insightHealth').className = 'tile__val tile__val--' + tone;
+    const bits = [];
+    bits.push(totalOpens + ' opens / ' + sessions + ' sessions');
+    if (totalErr > 0) bits.push(totalErr + ' err');
+    if (openExcess > 0.5) bits.push('excess reopens — check for churn');
+    setText('insightHealthSub', bits.join(' · '));
+  }
+}
+
+function renderQuotaHeadroom(buckets) {
+  if (!lastHealth) return;
+  const used = (lastHealth.quota && lastHealth.quota.usedToday) || 0;
+  const budget = (lastHealth.quota && lastHealth.quota.dailyBudget) || 9000;
+  const remaining = Math.max(0, budget - used);
+
+  // Burn rate: use the most recent non-zero hour of quotaUnitsUsed
+  let burn = 0;
+  for (let i = buckets.length - 1; i >= 0; i--) {
+    const q = buckets[i].quotaUnitsUsed || 0;
+    if (q > 0) { burn = q; break; }
+  }
+  if (!burn) {
+    setLed('ledHeadroom', 'ok');
+    setText('valHeadroom', '∞');
+    setText('noteHeadroom', 'idle — no burn rate to project');
+    setTone('valHeadroom', null);
+    return;
+  }
+  const hoursLeft = remaining / burn;
+  setText('valHeadroom', fmtHours(hoursLeft));
+  if (hoursLeft < 1) { setLed('ledHeadroom', 'err'); setTone('valHeadroom', 'err'); }
+  else if (hoursLeft < 3) { setLed('ledHeadroom', 'warn'); setTone('valHeadroom', 'warn'); }
+  else { setLed('ledHeadroom', 'ok'); setTone('valHeadroom', null); }
+  setText('noteHeadroom', 'at ' + fmtInt(burn) + ' u/hr · resets midnight PT');
+}
+
+function renderLiveSession(buckets) {
+  const row = document.getElementById('liveRow');
+  if (!lastHealth || !lastHealth.streaming) {
+    row.dataset.live = 'false';
+    return;
+  }
+  row.dataset.live = 'true';
+
+  // Live for — based on earliest client-observed streaming start (or
+  // lastGrpcActivityAt as a fallback lower bound).
+  const startAt = estimateSessionStart(lastHealth);
+  const durationMs = startAt ? Math.max(0, Date.now() - startAt) : null;
+  setText('sessLiveFor', fmtDuration(durationMs));
+
+  // Most recent hour's messages / 60 = current velocity (coarse but useful)
+  const last = buckets[buckets.length - 1];
+  const velocity = last ? Math.round((last.messagesRelayed || 0) / 60 * 10) / 10 : 0;
+  setText('sessVelocity', last ? (velocity.toFixed(1)) : DASH);
+
+  // Peak msgs per minute from rollup
+  const peak = buckets.reduce((a, b) => Math.max(a, b.peakMsgsPerMinute || 0), 0);
+  setText('sessPeak', peak ? String(peak) : DASH);
+
+  // Super chats + chatters
+  const scCount = buckets.reduce((a, b) => a + (b.superchatCount || 0), 0);
+  setText('sessSuperChat', fmtInt(scCount));
+  const chatters = buckets.reduce((a, b) => Math.max(a, b.uniqueAuthors || 0), 0);
+  setText('sessChatters', fmtInt(chatters));
+
+  // Mod mix (delete / ban) this session
+  const del = buckets.reduce((a, b) => a + (b.modActionsDelete || 0), 0);
+  const ban = buckets.reduce((a, b) => a + (b.modActionsBan || 0), 0);
+  setText('sessModMix', fmtInt(del + ban));
+  setText('sessModSub', del + ' del · ' + ban + ' ban');
+
+  setText('sessionStamp', 'live · ' + fmtDuration(durationMs));
+}
+
+function renderEvents(buckets) {
+  const list = document.getElementById('eventsList');
+  while (list.firstChild) list.removeChild(list.firstChild);
+  const recent = [...buckets].reverse().slice(0, 12);
+  if (!recent.length) {
+    appendEventRow(list, DASH, 'empty', 'No events in the last 24h yet.');
+    return;
+  }
+  if (lastHealth && lastHealth.streaming) {
+    appendEventRow(list, fmtTime(lastHealth.lastGrpcActivityAt || Date.now()),
+      'grpc.live', 'streaming videoId ' + (lastHealth.videoId || '?'));
+  }
+  for (const b of recent) {
+    const parts = [];
+    if (b.grpcOpens) parts.push(b.grpcOpens + (b.grpcOpens === 1 ? ' open' : ' opens'));
+    if (b.grpcErrors) parts.push(b.grpcErrors + (b.grpcErrors === 1 ? ' error' : ' errors'));
+    if (b.messagesRelayed) parts.push(fmtInt(b.messagesRelayed) + ' msgs');
+    if (b.modActionsMirrored) parts.push(b.modActionsMirrored + ' mod');
+    if (b.superchatCount) parts.push(b.superchatCount + ' sc');
+    if (b.quotaUnitsUsed) parts.push(b.quotaUnitsUsed + ' units');
+    if (!parts.length) continue;
+    const when = String(b.hour).slice(5, 16).replace('T', ' ');
+    const kind = b.grpcErrors ? 'grpc.error' : b.grpcOpens > 2 ? 'grpc.hour' : 'session';
+    appendEventRow(list, when, kind, parts.join(' · '));
+  }
+  setText('eventsStamp', recent.length + (recent.length === 1 ? ' hourly bucket' : ' hourly buckets'));
+}
+
+// ─── Ribbon dismiss ──────────────────────────────────────────
+let ribbonDismissed = false;
+document.getElementById('ribbonDismiss').addEventListener('click', () => {
+  ribbonDismissed = true;
+  document.getElementById('errRibbon').dataset.visible = 'false';
+});
+
+// ─── Fetch loop ──────────────────────────────────────────────
+const footTick = document.getElementById('footTick');
+function setFootTick(state, text) {
+  if (state) footTick.dataset.state = state;
+  if (text) setText('footTickText', text);
+}
+
 async function tick() {
+  setFootTick('fetching', 'refreshing…');
   const q = token ? '?token=' + encodeURIComponent(token) : '';
   try {
     const sep = q ? '&' : '?';
@@ -602,85 +1394,22 @@ async function tick() {
     ]);
     renderHealth(health);
     renderHistory(historyResp.buckets || []);
-    renderEvents(historyResp.buckets || [], health);
-    setText('updatedMeta', fmtTime(Date.now()));
+    const stamp = document.getElementById('updatedMeta');
+    stamp.textContent = fmtTime(Date.now());
+    document.getElementById('updatedMetaWrap').dataset.state = 'ok';
+    setFootTick('ok', 'auto-refresh 30s · next in 30s');
   } catch (err) {
     if (String(err.message).includes('FORBIDDEN')) {
       showAuth();
+      setFootTick('err', 'unlock required');
       return;
     }
     setText('updatedMeta', 'ERR');
+    document.getElementById('updatedMetaWrap').dataset.state = 'err';
     setText('noteService', err.message);
     setLed('ledService', 'err');
+    setFootTick('err', 'fetch failed · retry in 30s');
   }
-}
-
-function renderHealth(h) {
-  setLed('ledService', h.status === 'ok' ? 'ok' : 'err');
-  setText('valService', h.status === 'ok' ? 'RELAYING' : 'DOWN');
-  setText('noteService', h.grpcHealthy ? 'gRPC healthy' : (h.streaming ? 'gRPC stale' : 'idle'));
-
-  if (h.streaming && h.grpcHealthy) { setLed('ledYT', 'live'); setText('valYT', 'LIVE'); }
-  else if (h.streaming) { setLed('ledYT', 'warn'); setText('valYT', 'STALE'); }
-  else if (h.pendingPubSubVideoId) { setLed('ledYT', 'warn'); setText('valYT', 'PENDING'); }
-  else { setLed('ledYT', 'off'); setText('valYT', 'IDLE'); }
-  setText('noteYT', h.videoId ? ('videoId ' + h.videoId) : 'no active video');
-
-  setLed('ledWS', h.clients > 0 ? 'ok' : 'off');
-  setText('valWS', String(h.clients == null ? 0 : h.clients));
-  setText('noteWS', h.clients > 0 ? 'ws subscribers' : 'no active ws clients');
-
-  const used = (h.quota && h.quota.usedToday) || 0;
-  const budget = (h.quota && h.quota.dailyBudget) || 9000;
-  const pctNum = budget ? Math.round((used / budget) * 100) : 0;
-  setLed('ledQuota', pctNum > 90 ? 'err' : pctNum > 75 ? 'warn' : 'ok');
-  setText('valQuota', fmtInt(used));
-  setText('noteQuota', pctNum + '% of ' + fmtInt(budget));
-
-  setText('channelMeta', h.liveChatId ? (h.liveChatId.slice(0, 16) + '…') : '—');
-  setText('videoMeta', h.videoId || '—');
-  setText('uptimeStamp', 'uptime ' + fmtDuration(h.uptime));
-
-  setText('tileMsgs', fmtInt(h.messagesRelayed));
-  setText('tileDeletes', fmtInt(h.messagesDeleted));
-}
-
-function renderHistory(buckets) {
-  const sum = (key) => buckets.reduce((a, b) => a + (b[key] || 0), 0);
-  setText('tileRealtime', fmtInt(sum('modActionsMirrored')));
-  setText('tileReconcile', fmtInt(sum('reconcileRuns')));
-  setText('tileGrpcOpens', fmtInt(sum('grpcOpens')));
-  setText('tileGrpcErr', fmtInt(sum('grpcErrors')));
-
-  renderPlot('chartMessages', buckets, 'messagesRelayed', 'var(--yt)', 'MSGS');
-  renderPlot('chartMod', buckets, 'modActionsMirrored', 'var(--live)', 'ACTIONS');
-  renderPlot('chartGrpc', buckets, 'grpcOpens', 'var(--caution)', 'OPENS');
-  renderPlot('chartQuota', buckets, 'quotaUnitsUsed', 'var(--tw)', 'UNITS');
-}
-
-function renderEvents(buckets, health) {
-  const list = document.getElementById('eventsList');
-  while (list.firstChild) list.removeChild(list.firstChild);
-  const recent = [...buckets].reverse().slice(0, 12);
-  if (!recent.length) {
-    appendEventRow(list, '—', 'empty', 'No events in the last 24h yet.');
-    return;
-  }
-  if (health.streaming) {
-    appendEventRow(list, fmtTime(health.lastGrpcActivityAt || Date.now()), 'grpc.live', 'streaming videoId ' + (health.videoId || '?'));
-  }
-  for (const b of recent) {
-    const parts = [];
-    if (b.grpcOpens) parts.push(b.grpcOpens + ' open' + (b.grpcOpens === 1 ? '' : 's'));
-    if (b.grpcErrors) parts.push(b.grpcErrors + ' error' + (b.grpcErrors === 1 ? '' : 's'));
-    if (b.messagesRelayed) parts.push(fmtInt(b.messagesRelayed) + ' msgs');
-    if (b.modActionsMirrored) parts.push(b.modActionsMirrored + ' mod');
-    if (b.quotaUnitsUsed) parts.push(b.quotaUnitsUsed + ' units');
-    if (!parts.length) continue;
-    const when = String(b.hour).slice(5, 16).replace('T', ' ');
-    appendEventRow(list, when, b.grpcErrors ? 'grpc.error' : 'grpc.hour', parts.join(' · '));
-  }
-  setText('eventsStamp', recent.length + ' hourly buckets');
 }
 
 tick();

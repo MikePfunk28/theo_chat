@@ -131,7 +131,11 @@ function safeStringify(obj) {
 function logEvent(kind, payload) {
   const now = Date.now();
   try {
-    const serialized = safeStringify({ ts: now, kind, ...payload });
+    // Spread payload first so intrinsics (ts, kind) can never be overwritten
+    // by a caller that accidentally includes those keys. readEventsSince
+    // filters by ev.ts and metrics-history switches on ev.kind — a clobbered
+    // value silently corrupts the rollup (wrong bucket, dropped events).
+    const serialized = safeStringify({ ...payload, ts: now, kind });
     if (!serialized) {
       droppedCount++;
       return;
@@ -162,8 +166,16 @@ function logEvent(kind, payload) {
 // of one file per day; expected to be called from a cached endpoint, not
 // per-request. For a 30-day window at ~20 MB/day this is ~600 MB of I/O —
 // acceptable if cached 15s server-side.
+//
+// TODO: move this to an async / streaming reader with a precomputed rolling
+// aggregator so /api/metrics/history doesn't block the event loop at all on
+// cache miss. Today the 15s cache bounds the worst case and the hard window
+// cap below bounds the blast radius per request.
+const MAX_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // retention ceiling
 function readEventsSince(sinceMs) {
   const now = Date.now();
+  const floor = now - MAX_WINDOW_MS;
+  if (!Number.isFinite(sinceMs) || sinceMs < floor) sinceMs = floor;
   const startKey = dateKey(sinceMs);
   const endKey = dateKey(now);
   const results = [];
@@ -202,10 +214,32 @@ function eventLogDir() {
   return DIR;
 }
 
-function shutdownEventLog() {
-  if (writeStream) {
-    try { writeStream.end(); } catch {}
-    writeStream = null;
+// writeStream.end() is async — callers that race process.exit(0) afterward
+// lose the final buffered writes (session.ended, grpc.closed, ws.disconnected
+// on shutdown). Accept a callback and invoke it only after 'finish' has
+// actually fired.
+function shutdownEventLog(cb) {
+  const done = typeof cb === 'function' ? cb : () => {};
+  if (!writeStream) { done(); return; }
+  const s = writeStream;
+  writeStream = null;
+  try {
+    s.end(done);
+  } catch {
+    done();
+  }
+}
+
+// Test-only deterministic flush. Waits for the writable's internal buffer to
+// drain without closing the stream, so subsequent logEvent calls keep working.
+// Used by the event-log test suite to replace flaky setTimeout(50) waits.
+function flushEventLog(cb) {
+  const done = typeof cb === 'function' ? cb : () => {};
+  if (!writeStream) { done(); return; }
+  if (writeStream.writableNeedDrain) {
+    writeStream.once('drain', () => done());
+  } else {
+    setImmediate(done);
   }
 }
 
@@ -215,4 +249,5 @@ module.exports = {
   droppedEventCount,
   eventLogDir,
   shutdownEventLog,
+  flushEventLog,
 };
