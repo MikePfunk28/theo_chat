@@ -230,16 +230,24 @@ function shutdownEventLog(cb) {
   }
 }
 
-// Test-only deterministic flush. Waits for the writable's internal buffer to
-// drain without closing the stream, so subsequent logEvent calls keep working.
-// Used by the event-log test suite to replace flaky setTimeout(50) waits.
+// Test-only deterministic flush. Queue an empty chunk and wait for its
+// write callback — Node's Writable semantics guarantee the callback fires
+// only after all previously-buffered writes have been handled by the
+// underlying resource (for fs.createWriteStream, after the kernel has
+// accepted the bytes). That's what the test needs before it can safely
+// read the file back from disk.
+//
+// The prior implementation branched on writableNeedDrain and fell through
+// to setImmediate for small writes — which fires on the next tick BEFORE
+// the buffered chunk reaches the fd. Fast local disks won that race by
+// accident; Linux CI reliably lost it (run 24615829819).
 function flushEventLog(cb) {
   const done = typeof cb === 'function' ? cb : () => {};
   if (!writeStream) { done(); return; }
-  if (writeStream.writableNeedDrain) {
-    writeStream.once('drain', () => done());
-  } else {
-    setImmediate(done);
+  try {
+    writeStream.write('', done);
+  } catch {
+    done();
   }
 }
 

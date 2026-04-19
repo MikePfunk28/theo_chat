@@ -6,6 +6,17 @@ const { V3DataLiveChatMessageServiceClient } = require('./grpc/stream_list_grpc_
 const { LiveChatMessageListRequest } = require('./grpc/stream_list_pb.js');
 const { logEvent, droppedEventCount, eventLogDir, shutdownEventLog } = require('./event-log.js');
 const { getHistory: getMetricsHistory } = require('./metrics-history.js');
+const crypto = require('crypto');
+
+// Opaque, non-reversible identifier for metrics aggregation. HMAC-SHA256
+// truncated to 16 hex chars. Salt is per-process (rotates on restart) so
+// the hash cannot be joined across deploys. Good enough for
+// "count unique chatters this session" without retaining user identity.
+const METRICS_HASH_SALT = crypto.randomBytes(32);
+function hashIdForMetrics(id) {
+  if (!id) return '';
+  return crypto.createHmac('sha256', METRICS_HASH_SALT).update(String(id)).digest('hex').slice(0, 16);
+}
 
 // ─── Config from environment variables ─────────────────────────
 const API_KEY = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
@@ -336,13 +347,15 @@ const server = http.createServer((req, res) => {
   } else if (parsedUrl === '/api/metrics/history') {
     // Same auth as /metrics — operational data, not public.
     const metricsToken = process.env.METRICS_TOKEN || '';
-    if (metricsToken && reqUrl.searchParams.get('token') !== metricsToken) {
+    if (!metricsToken || reqUrl.searchParams.get('token') !== metricsToken) {
       res.writeHead(403);
       res.end('Forbidden');
       return;
     }
-    const windowParam = reqUrl.searchParams.get('window') || '7d';
+    const windowParam = reqUrl.searchParams.get('window') || '24h';
     const windowMap = { '1h': 60 * 60 * 1000, '24h': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000, '30d': 30 * 24 * 60 * 60 * 1000 };
+    // Strict validation — unknown values return 400 so misconfigured callers
+    // see the problem instead of getting wrong-window rollups silently.
     if (!Object.prototype.hasOwnProperty.call(windowMap, windowParam)) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'invalid window', allowed: Object.keys(windowMap) }));
@@ -489,18 +502,25 @@ function broadcast(event) {
   // so logging at this choke point means the rollups and /api/metrics/history
   // actually have data to aggregate (the charts were "NO DATA YET"
   // because message + mod events weren't instrumented).
+  // Privacy: do NOT persist chat author identifiers (displayName,
+  // channelId, messageId) to the 30-day JSONL log. The rollup only needs
+  // counts + uniqueness hashes; concrete PII in a long-lived file creates
+  // retention risk. Rollup aggregation uses a short-lived in-memory Set
+  // seeded from an opaque hash so unique-author counts still work without
+  // the original identifier ever touching disk.
   if (event.type === 'yt.message.created') {
     metrics.messagesRelayed++;
     logEvent('message.relayed', {
-      author: event.displayName,
-      authorChannelId: event.userId,
+      authorHash: hashIdForMetrics(event.userId),
       messageLen: event.message ? event.message.length : 0,
-      badges: event.badges || [],
+      isOwner: (event.badges || []).includes('owner'),
+      isMod: (event.badges || []).includes('moderator'),
+      isMember: (event.badges || []).includes('member'),
       isSuperChat: Boolean(event.superChatAmount),
     });
     if (event.superChatAmount) {
       logEvent('superchat', {
-        author: event.displayName,
+        authorHash: hashIdForMetrics(event.userId),
         amountText: event.superChatAmount,
         currency: event.currency || null,
         tierColor: event.superChatColor || null,
@@ -511,15 +531,13 @@ function broadcast(event) {
     logEvent('mod.action', {
       type: 'delete',
       source: 'youtube',
-      messageId: event.messageId,
       mirrored: true,
     });
   } else if (event.type === 'yt.user.banned') {
     logEvent('mod.action', {
       type: 'ban',
       source: 'youtube',
-      authorChannelId: event.userId,
-      author: event.displayName,
+      targetHash: hashIdForMetrics(event.userId),
       messagesRemoved: event.messagesRemoved || 0,
       mirrored: true,
     });
@@ -1377,6 +1395,11 @@ function gracefulExit(signal) {
   running = false;
   try { wss.close(); } catch {}
   try { server.close(); } catch {}
+  // Cancel any in-flight gRPC stream cleanly so the server sees a proper
+  // CANCELLED instead of a TCP drop. stopGrpcStream sets grpcStopReason
+  // so the catch block treats it as intentional (no false recordApiError,
+  // no rate-limit cooldown).
+  try { stopGrpcStream('shutdown'); } catch {}
   // Safety net: if the flush hangs for any reason, force-exit after 5s so we
   // don't leave an undead process in Railway's container.
   const forceExit = setTimeout(() => process.exit(0), 5000);

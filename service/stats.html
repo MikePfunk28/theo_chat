@@ -1000,21 +1000,35 @@ function appendEventRow(list, when, kind, detail) {
 // ─── State derivation ────────────────────────────────────────
 let sessionStartedAtClientEst = null;
 let lastHealth = null;
-let lastStreamingState = null;
+// `lastStreamingState` starts undefined (not false) so the first-tick
+// check can distinguish "we just observed streaming=true on a cold page
+// load" from "streaming just flipped on → capture client-side start time".
+// When we're joining mid-stream, we keep sessionStartedAtClientEst null
+// and fall through to lastGrpcActivityAt as the conservative lower bound
+// — that's the behavior the old doc comment described but the old code
+// got wrong (setting it to Date.now() on first observation reset the
+// clock to 0s on every reload).
+let lastStreamingState;
 
 function estimateSessionStart(health) {
-  // If streaming flipped on, capture the moment as session start. We do NOT
-  // rely on lastGrpcActivityAt because that moves on each message; the
-  // session start is when isStreaming first became true in the snapshot
-  // stream we observed. If we reload mid-session, fall back to
-  // lastGrpcActivityAt as a conservative lower bound on age.
-  if (health.streaming && !lastStreamingState) {
-    sessionStartedAtClientEst = Date.now();
-  } else if (!health.streaming) {
-    sessionStartedAtClientEst = null;
-  }
+  const wasStreaming = lastStreamingState;
   lastStreamingState = Boolean(health.streaming);
-  return sessionStartedAtClientEst || health.lastGrpcActivityAt || null;
+  if (!health.streaming) {
+    sessionStartedAtClientEst = null;
+    return null;
+  }
+  // Flipped on during an observed session (wasStreaming is strictly false,
+  // not undefined) — we saw the moment it started, so use now.
+  if (wasStreaming === false) {
+    sessionStartedAtClientEst = Date.now();
+    return sessionStartedAtClientEst;
+  }
+  // Already captured during this session: keep the original moment.
+  if (sessionStartedAtClientEst) return sessionStartedAtClientEst;
+  // Cold-load mid-stream (wasStreaming was undefined): fall back to
+  // lastGrpcActivityAt so "Live for" shows a realistic lower bound
+  // instead of 0s.
+  return health.lastGrpcActivityAt || null;
 }
 
 // ─── Main render ─────────────────────────────────────────────
