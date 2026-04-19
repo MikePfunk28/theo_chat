@@ -208,8 +208,11 @@
     connectWebSocket();
   }
 
-  // Heartbeat watchdog: if nothing from service for 90s, assume stale and reconnect
+  // Heartbeat watchdog: if nothing from service for 90s, assume stale and reconnect.
+  // Gated on isTargetChannelPage() so the timer is a no-op on non-Theo twitch tabs
+  // (content script matches *://*.twitch.tv/* but must be fully inert elsewhere).
   setInterval(() => {
+    if (!isTargetChannelPage()) return;
     if (isConnected && lastHeartbeat && Date.now() - lastHeartbeat > 90000) {
       console.warn('[TheoChat] No heartbeat for 90s — forcing reconnect');
       lastError = { message: 'stale connection, reconnecting', at: Date.now() };

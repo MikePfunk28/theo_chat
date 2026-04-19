@@ -59,3 +59,24 @@ theo_chat/
 - `service/config.json` — local service config
 - `service/.tokens.json` — OAuth refresh tokens
 - Any `.env` files
+
+## Known Pitfalls (READ BEFORE EDITING)
+
+### gRPC `streamList` is server-streaming, NOT REST pagination
+`nextPageToken` on gRPC responses marks a **batch boundary**, not a "reopen the stream" signal. Do NOT `break` on empty tokens and do NOT wrap `client.streamList(...)` in an outer `while` that reopens it. Opening it once per broadcast is correct. Reopening dozens of times during one stream trips YouTube's per-window rate limit on streamList opens and causes a production outage.
+
+See [docs/gotchas/grpc-streaming.md](docs/gotchas/grpc-streaming.md) for the full story, including the 2026-04-17 incident that cost a 30-minute cascade failure at hour 3.5 of a Theo stream.
+
+### HTTP/2 keepalive costs zero YouTube API quota
+Connection health during quiet chat is detected via `grpc.keepalive_time_ms` PING frames at the transport layer — NOT via polling `checkIfLive` when activity is silent. Don't reintroduce activity-based watchdogs that call REST `videos.list` on quiet stretches; every call is 1 quota unit and they cascade into user-visible restarts.
+
+### `recordApiError` distinguishes daily-exhaustion from rate-limit
+YouTube returns "exceeded your quota" strings for both `dailyLimitExceeded` and `rateLimitExceeded` / `userRateLimitExceeded`. Only the first is "we've used all 10k today, stop optional work until midnight PT." The others are per-window throttles, handled via `rateLimitCooldownUntil` with exponential backoff. **Check `err.errors[0].reason` structurally.** Do NOT match the message string.
+
+### The gRPC `streamList` open costs 1 unit
+Track it with `recordApiCall(1, 'grpc.streamList')`. The local `quotaUsedToday` counter previously undercounted vs. Google's real counter because opens weren't recorded. Post-fix the stream opens exactly once per broadcast so the undercount is ~1 unit per broadcast, but the tracking is still correct.
+
+### HTML scraping for live detection was removed intentionally
+The old `autoHealLiveCheck` scraped `youtube.com/channel/UC.../live` looking for a live video ID. It picked up videos from the recommendations sidebar, causing wrong-channel detections. Replaced by PubSub push + Twitch Helix fallback + `videos.list` hard-reject on `snippet.channelId !== CHANNEL_ID`. Do NOT bring scraping back for live-video detection.
+
+Scraping for **custom emoji library** (`fetchEmojiLibrary`) is fine — it parses a specific known-stable JSON blob from a single videoId's watch page. Zero quota, no channel-ID confusion risk.

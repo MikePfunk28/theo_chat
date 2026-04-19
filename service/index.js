@@ -4,6 +4,19 @@ const WebSocket = require('ws');
 const http = require('http');
 const { V3DataLiveChatMessageServiceClient } = require('./grpc/stream_list_grpc_pb.js');
 const { LiveChatMessageListRequest } = require('./grpc/stream_list_pb.js');
+const { logEvent, droppedEventCount, eventLogDir, shutdownEventLog } = require('./event-log.js');
+const { getHistory: getMetricsHistory } = require('./metrics-history.js');
+const crypto = require('crypto');
+
+// Opaque, non-reversible identifier for metrics aggregation. HMAC-SHA256
+// truncated to 16 hex chars. Salt is per-process (rotates on restart) so
+// the hash cannot be joined across deploys. Good enough for
+// "count unique chatters this session" without retaining user identity.
+const METRICS_HASH_SALT = crypto.randomBytes(32);
+function hashIdForMetrics(id) {
+  if (!id) return '';
+  return crypto.createHmac('sha256', METRICS_HASH_SALT).update(String(id)).digest('hex').slice(0, 16);
+}
 
 // ─── Config from environment variables ─────────────────────────
 const API_KEY = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
@@ -100,7 +113,13 @@ let pendingPubSubReceivedAt = 0;
 const QUOTA_DAILY_BUDGET = parseInt(process.env.QUOTA_DAILY_BUDGET || '9000', 10); // cap at 90% of 10K default
 const QUOTA_RECONCILE_CEILING = parseInt(process.env.QUOTA_RECONCILE_CEILING || '7500', 10); // stop reconcile at this point
 const MAX_WS_PER_IP = parseInt(process.env.MAX_WS_PER_IP || '5', 10);
-const GRPC_STALE_MS = parseInt(process.env.GRPC_STALE_MS || '75000', 10);
+// 15 minutes. With HTTP/2 keepalive enabled on the gRPC client, dead TCP
+// connections surface within ~40s as a transport error. The activity
+// watchdog is a belt-and-suspenders fallback for the pathological case
+// where keepalive reports the connection healthy but no real events have
+// arrived for an implausibly long time. 75s (the previous value) caused
+// false restarts on quiet chat; that's what keepalive eliminates.
+const GRPC_STALE_MS = parseInt(process.env.GRPC_STALE_MS || '900000', 10);
 const PUBSUB_CANDIDATE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const metrics = {
@@ -121,6 +140,10 @@ const metrics = {
   pubsubNotifications: 0,
   unknownMessageTypes: 0,
   grpcReconnects: 0,
+  grpcStreamsOpened: 0,       // lifetime total of streamList opens — stays ≈1 per session after the 1a fix
+  lastGrpcOpenAt: 0,
+  grpcOpenRateLimited: 0,     // count of RESOURCE_EXHAUSTED on streamList
+  eventLogDropped: 0,         // incremented when persistent log write fails
 };
 const connByIp = new Map();
 
@@ -142,6 +165,7 @@ setInterval(() => {
 
 function recordApiCall(cost, label) {
   metrics.quotaUsedToday += cost;
+  logEvent('quota.used', { cost, label, runningTotal: metrics.quotaUsedToday });
   if (metrics.quotaUsedToday % 500 < cost) {
     console.log(`  [Quota] ${label}: +${cost} (today=${metrics.quotaUsedToday}/${QUOTA_DAILY_BUDGET})`);
   }
@@ -153,18 +177,45 @@ function recordApiError(err, label) {
   metrics.lastApiError = { at: Date.now(), label, message: msg };
   console.error(`  [API] ${label} error: ${msg}`);
 
-  // Detect daily quota exhaustion → mark counter maxed so we stop all optional API calls today
-  if (msg.includes('quotaExceeded') || msg.includes('exceeded your')) {
+  // Distinguish daily quota from per-100-second rate limits using the
+  // structured `reason` field — not a string match on the error message.
+  // A bare 'exceeded your' match triggered on userRateLimitExceeded too,
+  // which pinned the daily counter falsely during the 2026-04-17 outage.
+  const structuredReason = err.errors?.[0]?.reason
+    || err.response?.data?.error?.errors?.[0]?.reason
+    || '';
+  const structuredDomain = err.errors?.[0]?.domain
+    || err.response?.data?.error?.errors?.[0]?.domain
+    || '';
+
+  const isDailyExhaustion =
+    structuredReason === 'dailyLimitExceeded' ||
+    (structuredReason === 'quotaExceeded' && structuredDomain === 'youtube.quota');
+
+  if (isDailyExhaustion) {
     if (metrics.quotaUsedToday < QUOTA_DAILY_BUDGET) {
-      console.warn(`  [Quota] YouTube reports quotaExceeded — capping counter at budget`);
+      console.warn(`  [Quota] YouTube reports dailyLimitExceeded — capping counter at budget`);
       metrics.quotaUsedToday = QUOTA_DAILY_BUDGET;
     }
   }
 
-  // Detect per-minute rate limit → exponential cooldown, capped at 30 min
-  if (err.code === 8 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit') || err.status === 429) {
+  // Detect per-window rate limit → exponential cooldown, capped at 30 min.
+  // Catches gRPC RESOURCE_EXHAUSTED (err.code === 8), googleapis REST 429
+  // (err.response?.status), raw fetch 429 (err.status), and structured
+  // rateLimitExceeded / userRateLimitExceeded reasons.
+  const restStatus = err.response?.status;
+  const isRateLimited =
+    err.code === 8 ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('rate limit') ||
+    err.status === 429 ||
+    restStatus === 429 ||
+    structuredReason === 'rateLimitExceeded' ||
+    structuredReason === 'userRateLimitExceeded';
+
+  if (isRateLimited) {
     rateLimitCooldownUntil = Date.now() + rateLimitCooldownMs;
-    console.warn(`  [API] Rate limit detected — cooldown for ${Math.round(rateLimitCooldownMs / 60000)} min`);
+    console.warn(`  [API] Rate limit detected (reason=${structuredReason || 'n/a'}) — cooldown for ${Math.round(rateLimitCooldownMs / 60000)} min`);
     rateLimitCooldownMs = Math.min(rateLimitCooldownMs * 2, 30 * 60 * 1000);
   }
 }
@@ -265,6 +316,7 @@ const server = http.createServer((req, res) => {
       res.end('Forbidden');
       return;
     }
+    metrics.eventLogDropped = droppedEventCount();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ...metrics,
@@ -281,6 +333,7 @@ const server = http.createServer((req, res) => {
       videoId,
       liveChatId,
       uniqueIpsConnected: connByIp.size,
+      eventLogDir: eventLogDir(),
       config: {
         QUOTA_DAILY_BUDGET,
         QUOTA_RECONCILE_CEILING,
@@ -291,6 +344,42 @@ const server = http.createServer((req, res) => {
         PUBSUB_CANDIDATE_TTL_MS,
       },
     }, null, 2));
+  } else if (parsedUrl === '/api/metrics/history') {
+    // Same auth as /metrics — operational data, not public.
+    const metricsToken = process.env.METRICS_TOKEN || '';
+    if (!metricsToken || reqUrl.searchParams.get('token') !== metricsToken) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+    const windowParam = reqUrl.searchParams.get('window') || '24h';
+    const windowMap = { '1h': 60 * 60 * 1000, '24h': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000, '30d': 30 * 24 * 60 * 60 * 1000 };
+    // Strict validation — unknown values return 400 so misconfigured callers
+    // see the problem instead of getting wrong-window rollups silently.
+    if (!Object.prototype.hasOwnProperty.call(windowMap, windowParam)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'invalid window', allowed: Object.keys(windowMap) }));
+      return;
+    }
+    const windowMs = windowMap[windowParam];
+    try {
+      const rollup = getMetricsHistory(windowMs);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ window: windowParam, generatedAt: Date.now(), buckets: rollup }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else if (parsedUrl === '/stats') {
+    try {
+      const statsPath = require('path').join(__dirname, 'stats.html');
+      const html = fs.readFileSync(statsPath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch (err) {
+      res.writeHead(500);
+      res.end('Stats page not found');
+    }
   } else if (parsedUrl === '/overlay') {
     try {
       const html = fs.readFileSync(overlayPath, 'utf8');
@@ -322,6 +411,7 @@ const server = http.createServer((req, res) => {
         const notification = parsePubSubNotification(body);
         const notifiedVideoId = notification.videoId;
         const notifiedChannelId = notification.channelId;
+        logEvent('pubsub.notification', { videoId: notifiedVideoId, channelId: notifiedChannelId });
 
         if (!notifiedChannelId) {
           console.warn('  [PubSub] Ignoring notification without a channel ID');
@@ -381,6 +471,7 @@ wss.on('connection', (ws, req) => {
 
   clientCount++;
   metrics.wsConnectsLifetime++;
+  logEvent('ws.connected', { ip, total: clientCount });
   console.log(`  [WS] Client connected from ${ip} (${clientCount} total)`);
   ws.send(JSON.stringify({ type: 'system.connected', text: 'TheoChat connected' }));
   // Send current emoji library to new client so they can render custom emojis
@@ -392,6 +483,7 @@ wss.on('connection', (ws, req) => {
     clientCount--;
     const n = (connByIp.get(ip) || 1) - 1;
     if (n <= 0) connByIp.delete(ip); else connByIp.set(ip, n);
+    logEvent('ws.disconnected', { ip, total: clientCount });
     console.log(`  [WS] Client disconnected from ${ip} (${clientCount} total)`);
     // If this was the last client, start the idle grace period
     if (clientCount === 0) scheduleIdleShutdown();
@@ -406,9 +498,50 @@ wss.on('connection', (ws, req) => {
 });
 
 function broadcast(event) {
-  // Metrics
-  if (event.type === 'yt.message.created') metrics.messagesRelayed++;
-  else if (event.type === 'yt.message.deleted') metrics.messagesDeleted++;
+  // Metrics + persistent event log. Every relay path flows through here,
+  // so logging at this choke point means the rollups and /api/metrics/history
+  // actually have data to aggregate (the charts were "NO DATA YET"
+  // because message + mod events weren't instrumented).
+  // Privacy: do NOT persist chat author identifiers (displayName,
+  // channelId, messageId) to the 30-day JSONL log. The rollup only needs
+  // counts + uniqueness hashes; concrete PII in a long-lived file creates
+  // retention risk. Rollup aggregation uses a short-lived in-memory Set
+  // seeded from an opaque hash so unique-author counts still work without
+  // the original identifier ever touching disk.
+  if (event.type === 'yt.message.created') {
+    metrics.messagesRelayed++;
+    logEvent('message.relayed', {
+      authorHash: hashIdForMetrics(event.userId),
+      messageLen: event.message ? event.message.length : 0,
+      isOwner: (event.badges || []).includes('owner'),
+      isMod: (event.badges || []).includes('moderator'),
+      isMember: (event.badges || []).includes('member'),
+      isSuperChat: Boolean(event.superChatAmount),
+    });
+    if (event.superChatAmount) {
+      logEvent('superchat', {
+        authorHash: hashIdForMetrics(event.userId),
+        amountText: event.superChatAmount,
+        currency: event.currency || null,
+        tierColor: event.superChatColor || null,
+      });
+    }
+  } else if (event.type === 'yt.message.deleted') {
+    metrics.messagesDeleted++;
+    logEvent('mod.action', {
+      type: 'delete',
+      source: 'youtube',
+      mirrored: true,
+    });
+  } else if (event.type === 'yt.user.banned') {
+    logEvent('mod.action', {
+      type: 'ban',
+      source: 'youtube',
+      targetHash: hashIdForMetrics(event.userId),
+      messagesRemoved: event.messagesRemoved || 0,
+      mirrored: true,
+    });
+  }
 
   const data = JSON.stringify(event);
   for (const client of wss.clients) {
@@ -483,9 +616,27 @@ function stopGrpcStream(reason) {
 
 function scheduleReconnect(videoIdToRetry, delayMs, reason) {
   if (!running || reconnectTimer || !videoIdToRetry) return;
+  // If rate-limit cooldown is active, defer the reconnect until the
+  // cooldown expires (plus a small jitter). This is the recovery path
+  // that was missing during the 2026-04-17 outage — gRPC errors never
+  // set rateLimitCooldownUntil because recordApiError wasn't wired into
+  // the gRPC catch block. Now it is, and scheduleReconnect honors it.
+  if (isInRateLimitCooldown()) {
+    const waitMs = Math.max(delayMs, rateLimitCooldownUntil - Date.now() + Math.floor(Math.random() * 5000));
+    console.warn(`  [YT] Rate-limit cooldown active — deferring reconnect (${reason}) by ${Math.round(waitMs / 1000)}s`);
+    delayMs = waitMs;
+  }
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     if (!running || isStreaming) return;
+    if (isInRateLimitCooldown()) {
+      // Re-check at fire time; if the cooldown got extended in the meantime,
+      // defer again rather than burning a checkIfLive call into the wall.
+      const retryIn = Math.max(1000, rateLimitCooldownUntil - Date.now() + 1000);
+      console.warn(`  [YT] Cooldown still active at reconnect fire time — retrying in ${Math.round(retryIn / 1000)}s`);
+      scheduleReconnect(videoIdToRetry, retryIn, reason);
+      return;
+    }
     if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING) {
       console.warn(`  [YT] Skipping reconnect (${reason}) — quota near ceiling`);
       return;
@@ -544,11 +695,12 @@ async function checkIfLive(targetVideoId) {
   }
 
   const broadcastStatus = snippet.liveBroadcastContent;
-  const isActive = broadcastStatus === 'live';
+  const isActive = broadcastStatus === 'live' || broadcastStatus === 'upcoming';
   const chatId = item.liveStreamingDetails?.activeLiveChatId;
 
   if (isActive && chatId) {
-    console.log(`  [YT] Live: "${snippet.title}" (${targetVideoId})`);
+    const label = broadcastStatus === 'upcoming' ? 'Waiting room' : 'Live';
+    console.log(`  [YT] ${label}: "${snippet.title}" (${targetVideoId})`);
     return chatId;
   }
   console.log(`  [YT] ${targetVideoId} not live (liveBroadcastContent=${broadcastStatus})`);
@@ -618,51 +770,95 @@ async function handleLiveCandidate(candidateVideoId, { source = 'unknown', notif
 }
 
 // ─── gRPC stream — runs until chat ends, then returns ──────────
+//
+// YouTube's streamList is a server-streaming RPC. ONE call opens a stream
+// that stays alive for the entire broadcast; the server pushes responses as
+// chat events happen. We do NOT re-call streamList on empty nextPageToken —
+// that treats server-streaming like REST pagination and caused the
+// 2026-04-17 outage (3.5 hours of churn trips YouTube's per-window rate
+// limit on streamList opens). Instead: open once, iterate the async
+// iterator until YouTube closes it or an error is thrown, then let
+// scheduleReconnect (the single reopen path) handle it with cooldown
+// honored.
+//
+// HTTP/2 keepalive detects dead connections accurately during quiet-chat
+// stretches without us having to guess from message activity. No false
+// "connection is stale" restarts triggered by a quiet crowd.
 async function connectGrpcStream() {
   console.log('  [YT] Connecting to YouTube gRPC stream...');
   isStreaming = true;
   grpcStopReason = null;
-  lastGrpcActivityAt = Date.now();
+  const openedAt = Date.now();
+  lastGrpcActivityAt = openedAt;
+  metrics.grpcStreamsOpened++;
+  metrics.lastGrpcOpenAt = openedAt;
+  // Opening the gRPC streamList costs 1 quota unit (same as videos.list).
+  // Previously untracked — before the 1a fix we were churning many opens
+  // per broadcast and undercounting local quota vs Google's real counter.
+  recordApiCall(1, 'grpc.streamList');
+  logEvent('grpc.opened', { videoId, liveChatId });
+  logEvent('session.started', { videoId, liveChatId });
 
   const client = new V3DataLiveChatMessageServiceClient(
     'youtube.googleapis.com:443',
-    grpc.credentials.createSsl()
+    grpc.credentials.createSsl(),
+    {
+      'grpc.keepalive_time_ms': 30000,           // send PING every 30s
+      'grpc.keepalive_timeout_ms': 10000,        // 10s for PONG before connection considered dead
+      'grpc.keepalive_permit_without_calls': 1,  // ping even during quiet chat stretches
+      'grpc.http2.max_pings_without_data': 0,    // no cap on pings when no data
+    }
   );
 
+  const request = new LiveChatMessageListRequest();
+  request.setLiveChatId(liveChatId);
+  request.setMaxResults(200);
+  request.setPartList(['snippet', 'authorDetails']);
+
+  const metadata = new grpc.Metadata();
+  metadata.add('x-goog-api-key', API_KEY);
+
+  const stream = client.streamList(request, metadata);
+  activeGrpcStream = stream;
+
   try {
-    while (running && isStreaming) {
-      const request = new LiveChatMessageListRequest();
-      request.setLiveChatId(liveChatId);
-      request.setMaxResults(200);
-      request.setPartList(['snippet', 'authorDetails']);
-      if (nextPageToken) request.setPageToken(nextPageToken);
-
-      const metadata = new grpc.Metadata();
-      metadata.add('x-goog-api-key', API_KEY);
-
-      const stream = client.streamList(request, metadata);
-      activeGrpcStream = stream; // so idle shutdown can cancel it
-
-      try {
-        for await (const response of stream) {
-          lastGrpcActivityAt = Date.now();
-          const res = response.toObject();
-          processMessages(res.itemsList || []);
-          nextPageToken = response.getNextPageToken() || '';
-          if (!nextPageToken) break;
-        }
-      } catch (err) {
-        if (!running) return;
-        if (err.code === 0 || (err.message && err.message.includes('stream ended'))) {
-          console.log('  [YT] Stream ended — returning to idle. Waiting for next PubSub notification.');
-        } else {
-          console.error(`  [YT] Stream error (code ${err.code}): ${err.message}`);
-        }
-        break;
+    for await (const response of stream) {
+      lastGrpcActivityAt = Date.now();
+      const res = response.toObject();
+      processMessages(res.itemsList || []);
+      // nextPageToken on a server-streaming response is NOT a reconnect
+      // signal — it's the server marking a batch boundary. We keep reading
+      // from the same stream until the server half-closes it or an error.
+    }
+    // Natural end: server half-closed the stream (broadcast ended,
+    // backend rotation, etc). Fall through to finally → shouldReconnect
+    // decides whether to reconnect via scheduleReconnect (the single
+    // reopen path, which honors cooldown).
+    console.log('  [YT] Stream closed by server — returning to finally for reconnect decision');
+  } catch (err) {
+    if (!running) return;
+    // gRPC code 1 (CANCELLED) and any close where we set grpcStopReason
+    // ourselves are intentional shutdowns — not API errors. Routing those
+    // through recordApiError was inflating apiErrors / lastApiError and could
+    // engage the rate-limit cooldown on a clean idle/restart shutdown.
+    const isIntentionalStop = err.code === 1 || Boolean(grpcStopReason);
+    if (err.code === 0 || isIntentionalStop || (err.message && err.message.includes('stream ended'))) {
+      console.log(`  [YT] Stream closed (reason=${grpcStopReason || 'server-half-close'})`);
+    } else {
+      console.error(`  [YT] Stream error (code ${err.code}): ${err.message}`);
+      // Route the error through recordApiError so rate-limit cooldowns
+      // actually engage. Without this, gRPC RESOURCE_EXHAUSTED (code 8)
+      // used to just log and reconnect every 10s, amplifying the rate
+      // limit into a full outage.
+      recordApiError(err, 'grpc-stream');
+      if (err.code === 8) {
+        metrics.grpcOpenRateLimited++;
       }
     }
   } finally {
     const wasVideoId = videoId;
+    const closedAt = Date.now();
+    const durationMs = closedAt - openedAt;
     const stopReason = grpcStopReason || 'stream-ended';
     const shouldReconnect =
       running &&
@@ -674,25 +870,42 @@ async function connectGrpcStream() {
     nextPageToken = '';
     activeGrpcStream = null;
     grpcStopReason = null;
+    logEvent('grpc.closed', { reason: stopReason, durationMs, videoId: wasVideoId });
 
-    if (stopReason === 'restart') {
-      console.log('  [YT] Restarting gRPC stream after watchdog recovery');
-      scheduleReconnect(wasVideoId, 1000, stopReason);
-      return;
-    }
+    // Always run cleanup. Previously an early `return` inside `finally` for
+    // the 'restart' path skipped session.ended logging AND the
+    // clearTrackedMessages sweep — which re-introduced exactly the stale-id
+    // reconcile bug this block is meant to prevent. Instead: always log,
+    // always clear tracked messages, always null liveChatId, then branch on
+    // stopReason at the end to pick the reconnect cadence.
+    logEvent('session.ended', {
+      videoId: wasVideoId,
+      durationMs,
+      reason: stopReason,
+      messagesRelayed: metrics.messagesRelayed,
+      messagesDeleted: metrics.messagesDeleted,
+    });
 
     liveChatId = null;
-    if (!shouldReconnect) {
+    clearTrackedMessages([...activeMessages.keys()]);
+    if (!shouldReconnect && stopReason !== 'restart') {
       videoId = null;
       emojiLibrary = {};
-      clearTrackedMessages([...activeMessages.keys()]);
     }
+
+    // Close the gRPC client so its HTTP/2 channel + keepalive timers are
+    // released deterministically. Without this, every reconnect accumulated
+    // a stale client and its keepalive PING timer over a long stream.
+    try { client.close(); } catch {}
 
     if (stopReason === 'idle' || stopReason === 'twitch-offline' || stopReason === 'stream-ended') {
       broadcast({ type: 'yt.chat.ended' });
     }
 
-    if (shouldReconnect) {
+    if (stopReason === 'restart') {
+      console.log('  [YT] Restarting gRPC stream after watchdog recovery');
+      scheduleReconnect(wasVideoId, 1000, stopReason);
+    } else if (shouldReconnect) {
       console.log('  [YT] Attempting reconnect in 10 seconds...');
       scheduleReconnect(wasVideoId, 10000, stopReason);
     } else if (running && wasVideoId && stopReason !== 'idle' && stopReason !== 'twitch-offline') {
@@ -756,6 +969,7 @@ async function reconcileMessages() {
       metrics.reconcileDeletes += removed;
       console.log(`  [RECONCILE] Swept ${removed} orphaned messages`);
     }
+    logEvent('reconcile.swept', { orphans: removed });
     broadcast({ type: 'system.reconciled', at: Date.now() });
   } catch (err) {
     recordApiError(err, 'reconcile');
@@ -1160,23 +1374,39 @@ async function main() {
   // Also renew proactively every 4 days (lease is 5 days)
   setInterval(() => ensurePubSub(), 4 * 24 * 60 * 60 * 1000);
 
-  // One-time startup check in case stream is already live when we boot
-  try {
-    const found = await startupDiscovery();
-    if (found) {
-      connectGrpcStream().catch((err) => {
-        console.error('  [YT] gRPC error:', err.message);
-        isStreaming = false;
-      });
-    }
-  } catch (err) {
-    console.error('  [YT] Startup error:', err.message);
-  }
-  // After this, NO polling. PubSub webhook drives everything.
+  // Zero-quota-idle: no discovery work at boot. Detection fires on the
+  // first WS client connect via kickoffDetectionForActiveClient(), which
+  // handles cached PubSub candidates, Twitch Helix fallback, and a
+  // one-time YouTube search. When nobody is on Twitch watching Theo, we
+  // burn zero YouTube quota.
 }
 
 // ─── Shutdown ──────────────────────────────────────────────────
-process.on('SIGINT', () => { running = false; wss.close(); server.close(); process.exit(0); });
-process.on('SIGTERM', () => { running = false; wss.close(); server.close(); process.exit(0); });
+// Graceful shutdown. writeStream.end() is async — the old handlers called it
+// and then raced process.exit(0), so the final burst of events (session.ended,
+// grpc.closed, ws.disconnected) was routinely lost. Now we stop accepting new
+// work, close sockets, then wait for the event log to finish flushing before
+// exiting.
+let shuttingDown = false;
+function gracefulExit(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`  [Shutdown] ${signal} received — draining...`);
+  running = false;
+  try { wss.close(); } catch {}
+  try { server.close(); } catch {}
+  // Cancel any in-flight gRPC stream cleanly so the server sees a proper
+  // CANCELLED instead of a TCP drop. stopGrpcStream sets grpcStopReason
+  // so the catch block treats it as intentional (no false recordApiError,
+  // no rate-limit cooldown).
+  try { stopGrpcStream('shutdown'); } catch {}
+  // Safety net: if the flush hangs for any reason, force-exit after 5s so we
+  // don't leave an undead process in Railway's container.
+  const forceExit = setTimeout(() => process.exit(0), 5000);
+  forceExit.unref();
+  shutdownEventLog(() => process.exit(0));
+}
+process.on('SIGINT', () => gracefulExit('SIGINT'));
+process.on('SIGTERM', () => gracefulExit('SIGTERM'));
 
 main();
