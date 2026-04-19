@@ -23,7 +23,24 @@ const path = require('path');
 
 const DEFAULT_DIR = path.resolve('./data');
 const DIR = process.env.EVENT_LOG_DIR || DEFAULT_DIR;
-const RETENTION_DAYS = parseInt(process.env.EVENT_LOG_RETENTION_DAYS || '30', 10);
+
+// Validate EVENT_LOG_RETENTION_DAYS strictly. An invalid value (e.g.
+// 'thirty', '') would make parseInt return NaN, which then poisons
+// purgeOldFiles: `cutoff = now - NaN * 86400000` is NaN, `cutoffKey`
+// becomes the string "NaN-NaN-NaN", and EVERY file's date compares
+// below that — the cleanup loop would delete the entire event log.
+// Fall back to the 30-day default and log once if the env is malformed.
+const DEFAULT_RETENTION_DAYS = 30;
+const RETENTION_DAYS = (() => {
+  const raw = process.env.EVENT_LOG_RETENTION_DAYS;
+  if (raw == null || raw === '') return DEFAULT_RETENTION_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`  [EventLog] EVENT_LOG_RETENTION_DAYS='${raw}' is not a positive number — falling back to ${DEFAULT_RETENTION_DAYS}`);
+    return DEFAULT_RETENTION_DAYS;
+  }
+  return Math.floor(parsed);
+})();
 
 let writeStream = null;
 let currentFile = '';

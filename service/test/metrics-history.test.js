@@ -38,12 +38,17 @@ delete require.cache[require.resolve('../metrics-history.js')];
 
 const { getHistory, invalidateCache } = require('../metrics-history.js');
 
-test('getHistory aggregates events into the current hour bucket', () => {
+test('getHistory aggregates events into the bucket containing the seeded events', () => {
   invalidateCache();
   const rollup = getHistory(60 * 60 * 1000);
   assert.ok(rollup.length >= 1, 'expected at least one bucket');
-  const hour = rollup[rollup.length - 1];
-  assert.ok(hour.grpcOpens >= 1);
+  // Locate the bucket by content, not by position. The seeded events
+  // use `now - 30s`; if the test runs within 30s of a UTC hour boundary
+  // those events fall in the PREVIOUS hour's bucket while the current
+  // hour's bucket is empty — the previous "last bucket" assumption flaked
+  // CI whenever the run timing lined up with that boundary.
+  const hour = rollup.find((b) => b.grpcOpens >= 1);
+  assert.ok(hour, 'expected a bucket containing the seeded grpc.opened event');
   assert.ok(hour.grpcCloses >= 1);
   assert.ok(hour.grpcErrors >= 1, 'error-reason close should bump grpcErrors');
   assert.ok(hour.messagesRelayed >= 2);
