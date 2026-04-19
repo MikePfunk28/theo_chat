@@ -465,13 +465,12 @@
     letter-spacing: 0.06em;
     color: var(--ink);
   }
-  .events__kind[data-kind="grpc.live"]   { color: var(--live); }
-  .events__kind[data-kind="grpc.hour"]   { color: var(--yt); }
-  .events__kind[data-kind="grpc.error"]  { color: var(--err); }
-  .events__kind[data-kind="grpc.cancel"] { color: var(--ink-muted); }
-  .events__kind[data-kind="quota.ceil"]  { color: var(--caution); }
-  .events__kind[data-kind="rate.limit"]  { color: var(--caution); }
-  .events__kind[data-kind="session"]     { color: var(--tw); }
+  .events__kind[data-kind="live"]         { color: var(--live); }
+  .events__kind[data-kind="clean"]        { color: var(--tw); }
+  .events__kind[data-kind="reconnecting"] { color: var(--caution); }
+  .events__kind[data-kind="error"]        { color: var(--err); }
+  .events__kind[data-kind="quota.ceil"]   { color: var(--caution); }
+  .events__kind[data-kind="rate.limit"]   { color: var(--caution); }
   .events__detail {
     color: var(--ink-muted);
     font-size: 11px;
@@ -588,35 +587,35 @@
   </div>
 
   <section class="signals" aria-label="Service signals" id="signalsGrid">
-    <div class="signal">
+    <div class="signal" title="The bridge itself — connects YouTube chat to your Twitch tab.">
       <span class="signal__led" id="ledService" data-state="off" aria-label="Service state"></span>
-      <span class="signal__label">SERVICE</span>
+      <span class="signal__label">BRIDGE</span>
       <span class="signal__value" id="valService">—</span>
-      <span class="signal__note" id="noteService">waiting for /health</span>
+      <span class="signal__note" id="noteService">waiting for status</span>
     </div>
-    <div class="signal">
+    <div class="signal" title="YouTube live chat feed. Live = actively receiving messages from YouTube.">
       <span class="signal__led" id="ledYT" data-state="off" aria-label="YouTube stream state"></span>
       <span class="signal__label">YOUTUBE</span>
       <span class="signal__value" id="valYT">—</span>
-      <span class="signal__note" id="noteYT">gRPC state unknown</span>
+      <span class="signal__note" id="noteYT">no active video</span>
     </div>
-    <div class="signal">
+    <div class="signal" title="How many tabs/overlays are currently receiving messages. Includes you and each mod with Twitch open.">
       <span class="signal__led" id="ledWS" data-state="off" aria-label="WebSocket client state"></span>
-      <span class="signal__label">CLIENTS</span>
+      <span class="signal__label">WATCHING</span>
       <span class="signal__value" id="valWS">—</span>
-      <span class="signal__note" id="noteWS">ws subscribers</span>
+      <span class="signal__note" id="noteWS">people connected</span>
     </div>
-    <div class="signal">
+    <div class="signal" title="YouTube API usage for today. Resets at midnight Pacific.">
       <span class="signal__led" id="ledQuota" data-state="off" aria-label="Quota usage state"></span>
-      <span class="signal__label">QUOTA</span>
+      <span class="signal__label">API BUDGET</span>
       <span class="signal__value" id="valQuota">—</span>
-      <span class="signal__note" id="noteQuota">units today</span>
+      <span class="signal__note" id="noteQuota">units used today</span>
     </div>
-    <div class="signal">
+    <div class="signal" title="At the current burn rate, how many more hours of streaming we can cover before hitting the daily API cap.">
       <span class="signal__led" id="ledHeadroom" data-state="off" aria-label="Quota headroom state"></span>
-      <span class="signal__label">HEADROOM</span>
+      <span class="signal__label">HOURS LEFT</span>
       <span class="signal__value" id="valHeadroom">—</span>
-      <span class="signal__note" id="noteHeadroom">hours at current burn</span>
+      <span class="signal__note" id="noteHeadroom">streaming time before daily cap</span>
     </div>
   </section>
 
@@ -626,12 +625,12 @@
       <span class="section__stamp" id="sessionStamp">—</span>
     </div>
     <div class="tiles">
-      <div class="tile"><span class="tile__val tile__val--live" id="sessLiveFor">—</span><span class="tile__key">LIVE FOR</span></div>
-      <div class="tile"><span class="tile__val" id="sessVelocity">—</span><span class="tile__key">MSGS / MIN</span></div>
-      <div class="tile"><span class="tile__val tile__val--yt" id="sessPeak">—</span><span class="tile__key">PEAK / MIN</span></div>
-      <div class="tile"><span class="tile__val tile__val--sc" id="sessSuperChat">—</span><span class="tile__key">SUPER CHATS</span></div>
-      <div class="tile"><span class="tile__val tile__val--tw" id="sessChatters">—</span><span class="tile__key">UNIQUE CHATTERS</span></div>
-      <div class="tile"><span class="tile__val tile__val--live" id="sessModMix">—</span><span class="tile__key">MOD ACTIONS</span><span class="tile__sub" id="sessModSub">del · ban</span></div>
+      <div class="tile" title="How long the stream has been going since we detected it went live."><span class="tile__val tile__val--live" id="sessLiveFor">—</span><span class="tile__key">LIVE FOR</span></div>
+      <div class="tile" title="Messages per minute in the current hour — a live feel for chat activity."><span class="tile__val" id="sessVelocity">—</span><span class="tile__key">MSGS / MIN</span></div>
+      <div class="tile" title="Highest messages-per-minute seen in any minute of this session."><span class="tile__val tile__val--yt" id="sessPeak">—</span><span class="tile__key">PEAK / MIN</span></div>
+      <div class="tile" title="Super Chats received this session."><span class="tile__val tile__val--sc" id="sessSuperChat">—</span><span class="tile__key">SUPER CHATS</span></div>
+      <div class="tile" title="Distinct people who have chatted this session."><span class="tile__val tile__val--tw" id="sessChatters">—</span><span class="tile__key">CHATTERS</span></div>
+      <div class="tile" title="Moderation actions by your YouTube mods this session, mirrored to Twitch."><span class="tile__val tile__val--live" id="sessModMix">—</span><span class="tile__key">MOD ACTIONS</span><span class="tile__sub" id="sessModSub">deletes · bans</span></div>
     </div>
   </section>
 
@@ -641,12 +640,12 @@
       <span class="section__stamp" id="uptimeStamp">uptime —</span>
     </div>
     <div class="tiles" id="snapshotTiles" data-loading="true">
-      <div class="tile"><span class="tile__val tile__val--yt" id="tileMsgs">—</span><span class="tile__key">MSGS RELAYED</span></div>
-      <div class="tile"><span class="tile__val" id="tileDeletes">—</span><span class="tile__key">DELETES MIRRORED</span></div>
-      <div class="tile"><span class="tile__val tile__val--live" id="tileModLive">—</span><span class="tile__key">MOD ACTIONS (24h)</span></div>
-      <div class="tile"><span class="tile__val tile__val--warn" id="tileReconcile">—</span><span class="tile__key">RECONCILE RUNS (24h)</span></div>
-      <div class="tile"><span class="tile__val" id="tileGrpcOpens">—</span><span class="tile__key">GRPC OPENS (24h)</span></div>
-      <div class="tile"><span class="tile__val tile__val--err" id="tileGrpcErr">—</span><span class="tile__key">GRPC ERRORS (24h)</span></div>
+      <div class="tile" title="Total YouTube messages relayed into Twitch since the service started."><span class="tile__val tile__val--yt" id="tileMsgs">—</span><span class="tile__key">MSGS RELAYED</span></div>
+      <div class="tile" title="Total YouTube deletions mirrored to Twitch since the service started."><span class="tile__val" id="tileDeletes">—</span><span class="tile__key">DELETES SYNCED</span></div>
+      <div class="tile" title="Mod actions (delete / timeout / ban) in the last 24 hours, mirrored to Twitch."><span class="tile__val tile__val--live" id="tileModLive">—</span><span class="tile__key">MOD ACTIONS · 24h</span></div>
+      <div class="tile" title="Background safety sweeps that catch any moderation events missed by the primary stream."><span class="tile__val tile__val--warn" id="tileReconcile">—</span><span class="tile__key">SAFETY SWEEPS · 24h</span></div>
+      <div class="tile" title="Times the YouTube chat feed connected. Should be about 1 per broadcast. Spikes mean the feed is reconnecting too often."><span class="tile__val" id="tileGrpcOpens">—</span><span class="tile__key">STREAM CONNECTS · 24h</span></div>
+      <div class="tile" title="Errors from the YouTube chat feed in the last 24 hours. Zero is ideal."><span class="tile__val tile__val--err" id="tileGrpcErr">—</span><span class="tile__key">CONNECTION ERRORS · 24h</span></div>
     </div>
   </section>
 
@@ -656,12 +655,12 @@
       <span class="section__stamp">derived from the last 24h · updates every 30s</span>
     </div>
     <div class="tiles">
-      <div class="tile"><span class="tile__val" id="insightHeat">—</span><span class="tile__key">CHAT HEAT</span><span class="tile__sub" id="insightHeatSub">relative to 24h baseline</span></div>
-      <div class="tile"><span class="tile__val tile__val--dim" id="insightPeak">—</span><span class="tile__key">PEAK HOUR (24h)</span><span class="tile__sub" id="insightPeakSub">when chat is hottest</span></div>
-      <div class="tile"><span class="tile__val" id="insightMod">—</span><span class="tile__key">MOD EFFORT</span><span class="tile__sub" id="insightModSub">actions per message</span></div>
-      <div class="tile"><span class="tile__val" id="insightReconcile">—</span><span class="tile__key">RECONCILE CATCH</span><span class="tile__sub" id="insightReconcileSub">safety-net effectiveness</span></div>
-      <div class="tile"><span class="tile__val" id="insightTrend">—</span><span class="tile__key">TREND</span><span class="tile__sub" id="insightTrendSub">session velocity direction</span></div>
-      <div class="tile"><span class="tile__val" id="insightHealth">—</span><span class="tile__key">GRPC HEALTH</span><span class="tile__sub" id="insightHealthSub">composite score 0–100</span></div>
+      <div class="tile" title="How busy chat is right now compared to the last 24 hours. HOT = busier than usual, COLD = quieter than usual."><span class="tile__val" id="insightHeat">—</span><span class="tile__key">CHAT HEAT</span><span class="tile__sub" id="insightHeatSub">relative to 24h baseline</span></div>
+      <div class="tile" title="Hour of the day (your local time) when chat was hottest in the last 24 hours. Useful for scheduling."><span class="tile__val tile__val--dim" id="insightPeak">—</span><span class="tile__key">BUSIEST HOUR · 24h</span><span class="tile__sub" id="insightPeakSub">when chat was hottest</span></div>
+      <div class="tile" title="Roughly how many messages go by between mod actions. High ratio = chat is behaving. Low = mods are scrubbing."><span class="tile__val" id="insightMod">—</span><span class="tile__key">MOD EFFORT</span><span class="tile__sub" id="insightModSub">actions per message</span></div>
+      <div class="tile" title="Percent of deletions we caught live (instantly) vs via the backup safety sweep. Higher live% = mod sync is snappy."><span class="tile__val" id="insightReconcile">—</span><span class="tile__key">MOD SYNC ACCURACY</span><span class="tile__sub" id="insightReconcileSub">how quickly we mirror deletes</span></div>
+      <div class="tile" title="Direction chat activity is heading this session. Positive = growing, negative = fading."><span class="tile__val" id="insightTrend">—</span><span class="tile__key">TREND</span><span class="tile__sub" id="insightTrendSub">activity direction</span></div>
+      <div class="tile" title="Composite score 0–100 of the YouTube chat feed's connection health. 90+ is ideal."><span class="tile__val" id="insightHealth">—</span><span class="tile__key">STREAM RELIABILITY</span><span class="tile__sub" id="insightHealthSub">composite 0–100</span></div>
     </div>
   </section>
 
@@ -673,22 +672,22 @@
     <div class="chart-grid">
       <div class="chart">
         <span class="chart__title">Messages relayed / hour</span>
-        <span class="chart__sub">Volume through the bridge. Dashed line = 24h median; pauses = quiet chat, not failure.</span>
+        <span class="chart__sub">Chat volume through the bridge. Dashed line is the 24-hour median so you can spot busier vs quieter hours.</span>
         <div class="chart__body plot" id="chartMessages"></div>
       </div>
       <div class="chart">
         <span class="chart__title">Moderation actions / hour</span>
-        <span class="chart__sub">Mirrored YouTube mod events reflected on Twitch. Deletes in green, bans in red.</span>
+        <span class="chart__sub">Your YouTube mods at work, mirrored to Twitch. Deletes in green, bans in red.</span>
         <div class="chart__body plot" id="chartMod"></div>
       </div>
       <div class="chart">
-        <span class="chart__title">gRPC stream opens / hour</span>
-        <span class="chart__sub">Should stay at about 1 per broadcast. Amber zone = regression of the 2026-04-17 reopen-churn bug.</span>
+        <span class="chart__title">Stream connections / hour</span>
+        <span class="chart__sub">How often the YouTube chat feed reconnected. One per broadcast is normal; the amber zone flags too-frequent reconnects (a warning sign).</span>
         <div class="chart__body plot" id="chartGrpc"></div>
       </div>
       <div class="chart">
-        <span class="chart__title">Quota units burned / hour</span>
-        <span class="chart__sub">10k/day default from YouTube. 1200/hr budgeted at 15s reconcile.</span>
+        <span class="chart__title">API budget used / hour</span>
+        <span class="chart__sub">YouTube API units consumed. Your daily cap is 10,000; this shows the burn rate.</span>
         <div class="chart__body plot" id="chartQuota"></div>
       </div>
     </div>
@@ -703,9 +702,9 @@
       <div class="timeline__bar" id="timelineBar" role="img" aria-label="Hourly activity ribbon"></div>
       <div class="timeline__legend">
         <span><i data-tone="ok"></i>CLEAN HOUR</span>
-        <span><i data-tone="warn"></i>RECONCILE SKIP</span>
-        <span><i data-tone="err"></i>ERRORS</span>
-        <span><i data-tone="idle"></i>IDLE</span>
+        <span><i data-tone="warn"></i>FEED RECONNECTED OFTEN</span>
+        <span><i data-tone="err"></i>ERRORS THIS HOUR</span>
+        <span><i data-tone="idle"></i>QUIET / OFFLINE</span>
       </div>
     </div>
   </section>
@@ -1102,9 +1101,9 @@ function renderHistory(buckets) {
   // Charts
   renderPlot('chartMessages', buckets, 'messagesRelayed', 'var(--yt)', 'MSGS', { showMedian: true });
   renderStackedMod('chartMod', buckets);
-  renderPlot('chartGrpc', buckets, 'grpcOpens', 'var(--caution)', 'OPENS', {
+  renderPlot('chartGrpc', buckets, 'grpcOpens', 'var(--caution)', 'CONNECTS', {
     warnBand: 2,
-    emptyHint: 'one stream open per broadcast is normal. spikes here mean the reopen-churn bug is back.',
+    emptyHint: 'one connection per broadcast is normal. spikes mean the feed keeps dropping — worth investigating.',
   });
   renderPlot('chartQuota', buckets, 'quotaUnitsUsed', 'var(--tw)', 'UNITS', { showMedian: true });
 
@@ -1136,8 +1135,37 @@ function stddev(values, mu) {
   return Math.sqrt(variance);
 }
 
-function renderInsights(buckets) {
+// The trailing bucket represents the in-progress UTC hour. Its
+// messagesRelayed is only the fraction of an hour we've seen so far —
+// comparing it directly against complete-hour buckets biases heat,
+// peak, and trend downward (the current hour looks "quiet" even when
+// it's on pace for a peak). Normalize by dividing by elapsedFraction
+// so the trailing bucket reports a per-hour rate equivalent to the
+// other buckets. Guards against division-by-zero when buckets is
+// empty or the hour just started.
+function normalizedMsgsPerHour(buckets) {
+  if (!buckets.length) return [];
   const msgs = buckets.map((b) => b.messagesRelayed || 0);
+  const now = new Date();
+  const currentHourKey =
+    now.getUTCFullYear() + '-' +
+    String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getUTCDate()).padStart(2, '0') + 'T' +
+    String(now.getUTCHours()).padStart(2, '0') + ':00:00Z';
+  const lastHour = buckets[buckets.length - 1].hour;
+  if (lastHour === currentHourKey) {
+    const elapsed = (now.getUTCMinutes() + now.getUTCSeconds() / 60) / 60;
+    // Require at least 2 minutes elapsed before we trust the extrapolation —
+    // below that the fraction amplifies noise into absurd rates.
+    if (elapsed >= 2 / 60) {
+      msgs[msgs.length - 1] = (buckets[buckets.length - 1].messagesRelayed || 0) / elapsed;
+    }
+  }
+  return msgs;
+}
+
+function renderInsights(buckets) {
+  const msgs = normalizedMsgsPerHour(buckets);
   const hasActivity = msgs.some((m) => m > 0);
 
   // 1. Chat heat — z-score of latest active hour vs 24h mean+stddev.
@@ -1153,7 +1181,13 @@ function renderInsights(buckets) {
       setText('insightHeat', label);
       const tone = z > 1.5 ? 'err' : z < -1.5 ? 'warn' : 'live';
       document.getElementById('insightHeat').className = 'tile__val tile__val--' + tone;
-      setText('insightHeatSub', z.toFixed(1) + 'σ vs 24h · ' + fmtInt(recent) + ' msgs now vs ' + fmtInt(Math.round(mu)) + ' avg');
+      // Human-readable delta vs the 24h baseline rather than raw sigma notation.
+      const delta = mu > 0 ? Math.round(((recent - mu) / mu) * 100) : 0;
+      const direction = delta > 0 ? 'above' : 'below';
+      const absPct = Math.abs(delta);
+      const phrase = absPct < 15 ? 'around normal'
+        : absPct + '% ' + direction + ' the 24h average';
+      setText('insightHeatSub', phrase + ' · ' + fmtInt(recent) + ' msgs/hr now · ' + fmtInt(Math.round(mu)) + ' typical');
     } else {
       setText('insightHeat', 'STEADY');
       document.getElementById('insightHeat').className = 'tile__val tile__val--live';
@@ -1167,16 +1201,25 @@ function renderInsights(buckets) {
 
   // 2. Peak hour — which hour in the last 24 had the most messages.
   //    Actionable: "schedule around your peak engagement time."
+  //    Uses the hourly-rate-normalized values so the in-progress hour
+  //    competes on equal footing with complete hours.
   if (hasActivity) {
     let peakIdx = -1, peakMsgs = 0;
     for (let i = 0; i < buckets.length; i++) {
-      if ((buckets[i].messagesRelayed || 0) > peakMsgs) { peakMsgs = buckets[i].messagesRelayed; peakIdx = i; }
+      if (msgs[i] > peakMsgs) { peakMsgs = msgs[i]; peakIdx = i; }
     }
     if (peakIdx >= 0) {
+      // Show the peak hour in the viewer's local timezone — Theo plans his
+      // stream schedule against his own clock, not UTC.
       const d = new Date(buckets[peakIdx].hour);
-      const hh = String(d.getUTCHours()).padStart(2, '0');
-      setText('insightPeak', hh + ':00');
-      setText('insightPeakSub', fmtInt(peakMsgs) + ' msgs · ' + (buckets[peakIdx].uniqueAuthors || 0) + ' chatters · UTC');
+      const localHr = d.getHours();
+      const hourLabel = localHr === 0 ? '12 AM'
+        : localHr < 12 ? localHr + ' AM'
+        : localHr === 12 ? '12 PM'
+        : (localHr - 12) + ' PM';
+      setText('insightPeak', hourLabel);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+      setText('insightPeakSub', fmtInt(Math.round(peakMsgs)) + ' msgs · ' + (buckets[peakIdx].uniqueAuthors || 0) + ' chatters · ' + tz);
     } else {
       setText('insightPeak', DASH);
       setText('insightPeakSub', 'no messages in 24h');
@@ -1188,14 +1231,16 @@ function renderInsights(buckets) {
 
   // 3. Mod effort — actions per message ratio, expressed as 1-in-N.
   //    Actionable: "is chat clean enough to mod alone?"
-  const totalMsgs = msgs.reduce((a, b) => a + b, 0);
+  //    Uses RAW message totals (not normalized hourly rates) because this
+  //    is a count-to-count ratio, not a rate comparison.
+  const totalMsgs = buckets.reduce((a, b) => a + (b.messagesRelayed || 0), 0);
   const totalMod = buckets.reduce((a, b) => a + (b.modActionsMirrored || 0), 0);
   if (totalMsgs > 0 && totalMod > 0) {
     const oneIn = Math.round(totalMsgs / totalMod);
-    setText('insightMod', '1 : ' + fmtInt(oneIn));
+    setText('insightMod', '1 in ' + fmtInt(oneIn));
     const tone = oneIn < 50 ? 'err' : oneIn < 200 ? 'warn' : 'live';
     document.getElementById('insightMod').className = 'tile__val tile__val--' + tone;
-    setText('insightModSub', totalMod + ' actions over ' + fmtInt(totalMsgs) + ' msgs · lower = more scrubbing');
+    setText('insightModSub', totalMod + ' mod actions over ' + fmtInt(totalMsgs) + ' msgs · fewer messages per action = more scrubbing');
   } else if (totalMsgs > 0) {
     setText('insightMod', 'CLEAN');
     document.getElementById('insightMod').className = 'tile__val tile__val--live';
@@ -1218,8 +1263,8 @@ function renderInsights(buckets) {
     setText('insightReconcile', pct + '% live');
     const tone = pct > 90 ? 'live' : pct > 70 ? 'warn' : 'err';
     document.getElementById('insightReconcile').className = 'tile__val tile__val--' + tone;
-    const interp = pct > 90 ? 'gRPC events arriving cleanly' : pct > 70 ? 'safety net catching some gaps' : 'gRPC missing events — investigate';
-    setText('insightReconcileSub', rtDel + ' live · ' + rcDel + ' reconcile · ' + interp);
+    const interp = pct > 90 ? 'mod actions mirror instantly' : pct > 70 ? 'safety sweep catching some gaps' : 'some live events missed — check the feed';
+    setText('insightReconcileSub', rtDel + ' live · ' + rcDel + ' via safety sweep · ' + interp);
   } else {
     setText('insightReconcile', DASH);
     document.getElementById('insightReconcile').className = 'tile__val tile__val--dim';
@@ -1331,10 +1376,30 @@ function renderLiveSession(buckets) {
   const durationMs = startAt ? Math.max(0, Date.now() - startAt) : null;
   setText('sessLiveFor', fmtDuration(durationMs));
 
-  // Most recent hour's messages / 60 = current velocity (coarse but useful)
+  // Current velocity = messages per minute in the in-progress hour so far.
+  // Dividing raw-hour-count / 60 underreports when we're 10 minutes into
+  // an hour — that gives msgs/min at 1/6 the true rate. Divide by actual
+  // elapsed minutes of the current bucket instead. For prior complete
+  // hours (lookback case) we fall back to raw/60.
   const last = buckets[buckets.length - 1];
-  const velocity = last ? Math.round((last.messagesRelayed || 0) / 60 * 10) / 10 : 0;
-  setText('sessVelocity', last ? (velocity.toFixed(1)) : DASH);
+  if (last) {
+    const now = new Date();
+    const currentHourKey =
+      now.getUTCFullYear() + '-' +
+      String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(now.getUTCDate()).padStart(2, '0') + 'T' +
+      String(now.getUTCHours()).padStart(2, '0') + ':00:00Z';
+    let minutesElapsed = 60;
+    if (last.hour === currentHourKey) {
+      minutesElapsed = now.getUTCMinutes() + now.getUTCSeconds() / 60;
+    }
+    const velocity = minutesElapsed >= 0.5
+      ? Math.round((last.messagesRelayed || 0) / minutesElapsed * 10) / 10
+      : 0;
+    setText('sessVelocity', velocity.toFixed(1));
+  } else {
+    setText('sessVelocity', DASH);
+  }
 
   // Peak msgs per minute from rollup
   const peak = buckets.reduce((a, b) => Math.max(a, b.peakMsgsPerMinute || 0), 0);
@@ -1365,22 +1430,26 @@ function renderEvents(buckets) {
   }
   if (lastHealth && lastHealth.streaming) {
     appendEventRow(list, fmtTime(lastHealth.lastGrpcActivityAt || Date.now()),
-      'grpc.live', 'streaming videoId ' + (lastHealth.videoId || '?'));
+      'live', 'relaying video ' + (lastHealth.videoId || '?'));
   }
   for (const b of recent) {
     const parts = [];
-    if (b.grpcOpens) parts.push(b.grpcOpens + (b.grpcOpens === 1 ? ' open' : ' opens'));
+    if (b.grpcOpens) parts.push(b.grpcOpens + (b.grpcOpens === 1 ? ' connect' : ' connects'));
     if (b.grpcErrors) parts.push(b.grpcErrors + (b.grpcErrors === 1 ? ' error' : ' errors'));
     if (b.messagesRelayed) parts.push(fmtInt(b.messagesRelayed) + ' msgs');
-    if (b.modActionsMirrored) parts.push(b.modActionsMirrored + ' mod');
-    if (b.superchatCount) parts.push(b.superchatCount + ' sc');
-    if (b.quotaUnitsUsed) parts.push(b.quotaUnitsUsed + ' units');
+    if (b.modActionsMirrored) parts.push(b.modActionsMirrored + ' mod ' + (b.modActionsMirrored === 1 ? 'action' : 'actions'));
+    if (b.superchatCount) parts.push(b.superchatCount + ' super chat' + (b.superchatCount === 1 ? '' : 's'));
+    if (b.quotaUnitsUsed) parts.push(b.quotaUnitsUsed + ' api units');
     if (!parts.length) continue;
-    const when = String(b.hour).slice(5, 16).replace('T', ' ');
-    const kind = b.grpcErrors ? 'grpc.error' : b.grpcOpens > 2 ? 'grpc.hour' : 'session';
+    // Format the hour marker in the viewer's local timezone so it matches
+    // the peak-hour display elsewhere on the page.
+    const when = new Date(b.hour).toLocaleString([], {
+      month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    const kind = b.grpcErrors ? 'error' : b.grpcOpens > 2 ? 'reconnecting' : 'clean';
     appendEventRow(list, when, kind, parts.join(' · '));
   }
-  setText('eventsStamp', recent.length + (recent.length === 1 ? ' hourly bucket' : ' hourly buckets'));
+  setText('eventsStamp', recent.length + (recent.length === 1 ? ' hour' : ' hours'));
 }
 
 // ─── Ribbon dismiss ──────────────────────────────────────────
