@@ -1182,12 +1182,16 @@ function renderInsights(buckets) {
       const tone = z > 1.5 ? 'err' : z < -1.5 ? 'warn' : 'live';
       document.getElementById('insightHeat').className = 'tile__val tile__val--' + tone;
       // Human-readable delta vs the 24h baseline rather than raw sigma notation.
+      // `recent` comes from normalizedMsgsPerHour and can be a non-integer rate
+      // (raw / elapsedFraction), so round before formatting — otherwise
+      // fmtInt stringifies the float with long decimals under 1000.
+      const recentRounded = Math.round(recent);
       const delta = mu > 0 ? Math.round(((recent - mu) / mu) * 100) : 0;
       const direction = delta > 0 ? 'above' : 'below';
       const absPct = Math.abs(delta);
       const phrase = absPct < 15 ? 'around normal'
         : absPct + '% ' + direction + ' the 24h average';
-      setText('insightHeatSub', phrase + ' · ' + fmtInt(recent) + ' msgs/hr now · ' + fmtInt(Math.round(mu)) + ' typical');
+      setText('insightHeatSub', phrase + ' · ' + fmtInt(recentRounded) + ' msgs/hr now · ' + fmtInt(Math.round(mu)) + ' typical');
     } else {
       setText('insightHeat', 'STEADY');
       document.getElementById('insightHeat').className = 'tile__val tile__val--live';
