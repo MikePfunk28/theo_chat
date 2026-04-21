@@ -108,18 +108,27 @@ let grpcStopReason = null;
 let rateLimitCooldownMs = 5 * 60 * 1000;
 let pendingPubSubVideoId = '';
 let pendingPubSubReceivedAt = 0;
+let lastGrpcIdleAuditAt = 0;
+let grpcReconnectCircuitUntil = 0;
+let grpcReconnectCircuitReason = '';
+const grpcOpenHistory = [];
 
 // ─── Metrics & safety ──────────────────────────────────────────
 const QUOTA_DAILY_BUDGET = parseInt(process.env.QUOTA_DAILY_BUDGET || '9000', 10); // cap at 90% of 10K default
 const QUOTA_RECONCILE_CEILING = parseInt(process.env.QUOTA_RECONCILE_CEILING || '7500', 10); // stop reconcile at this point
 const MAX_WS_PER_IP = parseInt(process.env.MAX_WS_PER_IP || '5', 10);
 // 15 minutes. With HTTP/2 keepalive enabled on the gRPC client, dead TCP
-// connections surface within ~40s as a transport error. The activity
-// watchdog is a belt-and-suspenders fallback for the pathological case
-// where keepalive reports the connection healthy but no real events have
-// arrived for an implausibly long time. 75s (the previous value) caused
-// false restarts on quiet chat; that's what keepalive eliminates.
+// connections surface within ~40s as a transport error. We still audit very
+// long idle stretches, but we no longer restart purely because chat is quiet;
+// keepalive and real transport errors are the authoritative reconnect signal.
 const GRPC_STALE_MS = parseInt(process.env.GRPC_STALE_MS || '900000', 10);
+const GRPC_KEEPALIVE_TIME_MS = parseInt(process.env.GRPC_KEEPALIVE_TIME_MS || '30000', 10);
+const GRPC_KEEPALIVE_TIMEOUT_MS = parseInt(process.env.GRPC_KEEPALIVE_TIMEOUT_MS || '10000', 10);
+const GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS = parseInt(process.env.GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS || '1', 10);
+const GRPC_HTTP2_MAX_PINGS_WITHOUT_DATA = parseInt(process.env.GRPC_HTTP2_MAX_PINGS_WITHOUT_DATA || '0', 10);
+const GRPC_OPEN_WINDOW_MS = parseInt(process.env.GRPC_OPEN_WINDOW_MS || '600000', 10);
+const GRPC_OPEN_BURST_LIMIT = parseInt(process.env.GRPC_OPEN_BURST_LIMIT || '6', 10);
+const GRPC_OPEN_CIRCUIT_MS = parseInt(process.env.GRPC_OPEN_CIRCUIT_MS || '1800000', 10);
 const PUBSUB_CANDIDATE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const metrics = {
@@ -143,6 +152,8 @@ const metrics = {
   grpcStreamsOpened: 0,       // lifetime total of streamList opens — stays ≈1 per session after the 1a fix
   lastGrpcOpenAt: 0,
   grpcOpenRateLimited: 0,     // count of RESOURCE_EXHAUSTED on streamList
+  grpcCircuitTrips: 0,
+  lastGrpcCircuitTripAt: 0,
   eventLogDropped: 0,         // incremented when persistent log write fails
 };
 const connByIp = new Map();
@@ -216,6 +227,12 @@ function recordApiError(err, label) {
   if (isRateLimited) {
     rateLimitCooldownUntil = Date.now() + rateLimitCooldownMs;
     console.warn(`  [API] Rate limit detected (reason=${structuredReason || 'n/a'}) — cooldown for ${Math.round(rateLimitCooldownMs / 60000)} min`);
+    if (label === 'grpc-stream') {
+      tripGrpcReconnectCircuit(
+        `rate-limited streamList open (${structuredReason || 'grpc code 8'})`,
+        Math.max(rateLimitCooldownMs, GRPC_OPEN_CIRCUIT_MS)
+      );
+    }
     rateLimitCooldownMs = Math.min(rateLimitCooldownMs * 2, 30 * 60 * 1000);
   }
 }
@@ -226,6 +243,64 @@ function isInRateLimitCooldown() {
 }
 function clearRateLimitCooldown() {
   rateLimitCooldownMs = 5 * 60 * 1000;
+}
+
+function pruneGrpcOpenHistory(now = Date.now()) {
+  const cutoff = now - GRPC_OPEN_WINDOW_MS;
+  while (grpcOpenHistory.length && grpcOpenHistory[0] < cutoff) {
+    grpcOpenHistory.shift();
+  }
+}
+
+function getRecentGrpcOpenCount(now = Date.now()) {
+  pruneGrpcOpenHistory(now);
+  return grpcOpenHistory.length;
+}
+
+function isGrpcReconnectCircuitOpen(now = Date.now()) {
+  if (grpcReconnectCircuitUntil && now >= grpcReconnectCircuitUntil) {
+    grpcReconnectCircuitUntil = 0;
+    grpcReconnectCircuitReason = '';
+  }
+  return Boolean(grpcReconnectCircuitUntil && now < grpcReconnectCircuitUntil);
+}
+
+function getGrpcReconnectCircuitWaitMs(now = Date.now()) {
+  return Math.max(0, grpcReconnectCircuitUntil - now + 1000);
+}
+
+function tripGrpcReconnectCircuit(reason, holdMs = GRPC_OPEN_CIRCUIT_MS) {
+  const now = Date.now();
+  const wasOpen = isGrpcReconnectCircuitOpen(now);
+  const nextUntil = now + Math.max(holdMs, 1000);
+  const shouldLog = !wasOpen || nextUntil > grpcReconnectCircuitUntil;
+  grpcReconnectCircuitUntil = Math.max(grpcReconnectCircuitUntil, nextUntil);
+  grpcReconnectCircuitReason = reason;
+  if (shouldLog) {
+    metrics.grpcCircuitTrips++;
+    metrics.lastGrpcCircuitTripAt = now;
+    console.error(`  [YT] Reconnect circuit OPEN for ${Math.round((grpcReconnectCircuitUntil - now) / 1000)}s — ${reason}`);
+    logEvent('grpc.circuit.opened', {
+      reason,
+      holdMs: grpcReconnectCircuitUntil - now,
+      recentOpenCount: getRecentGrpcOpenCount(now),
+      windowMs: GRPC_OPEN_WINDOW_MS,
+    });
+  }
+}
+
+function reserveGrpcOpenSlot(openReason) {
+  const now = Date.now();
+  if (isGrpcReconnectCircuitOpen(now)) return false;
+  pruneGrpcOpenHistory(now);
+  if (grpcOpenHistory.length >= GRPC_OPEN_BURST_LIMIT) {
+    tripGrpcReconnectCircuit(
+      `blocked ${grpcOpenHistory.length + 1}th streamList open within ${Math.round(GRPC_OPEN_WINDOW_MS / 60000)} min (${openReason})`
+    );
+    return false;
+  }
+  grpcOpenHistory.push(now);
+  return true;
 }
 
 function rememberPubSubCandidate(videoId) {
@@ -280,7 +355,15 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const parsedUrl = reqUrl.pathname;
-  const grpcHealthy = Boolean(isStreaming && lastGrpcActivityAt && Date.now() - lastGrpcActivityAt < GRPC_STALE_MS);
+  const grpcIdleMs = lastGrpcActivityAt ? Date.now() - lastGrpcActivityAt : null;
+  const grpcRecentOpenCount = getRecentGrpcOpenCount();
+  const grpcReconnectCircuitOpen = isGrpcReconnectCircuitOpen();
+  const grpcReconnectCircuitRemainingMs = grpcReconnectCircuitOpen
+    ? Math.max(0, grpcReconnectCircuitUntil - Date.now())
+    : 0;
+  // Health reflects whether the stream is still open; chat inactivity alone is
+  // not a failure when HTTP/2 keepalive is configured on the transport.
+  const grpcHealthy = Boolean(isStreaming && activeGrpcStream);
   const twitchFallbackConfigured = Boolean(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET);
 
   if (parsedUrl === '/health' || parsedUrl === '/') {
@@ -295,6 +378,12 @@ const server = http.createServer((req, res) => {
       twitchFallbackConfigured,
       grpcHealthy,
       lastGrpcActivityAt,
+      grpcIdleMs,
+      grpcRecentOpenCount,
+      grpcReconnectCircuitOpen,
+      grpcReconnectCircuitUntil,
+      grpcReconnectCircuitRemainingMs,
+      grpcReconnectCircuitReason,
       lastTwitchLiveCheckAt,
       lastTwitchLiveResult,
       pendingPubSubVideoId,
@@ -326,6 +415,12 @@ const server = http.createServer((req, res) => {
       twitchFallbackConfigured,
       grpcHealthy,
       lastGrpcActivityAt,
+      grpcIdleMs,
+      grpcRecentOpenCount,
+      grpcReconnectCircuitOpen,
+      grpcReconnectCircuitUntil,
+      grpcReconnectCircuitRemainingMs,
+      grpcReconnectCircuitReason,
       lastTwitchLiveCheckAt,
       lastTwitchLiveResult,
       pendingPubSubVideoId,
@@ -341,6 +436,13 @@ const server = http.createServer((req, res) => {
         RECONCILE_INTERVAL_MS,
         MESSAGE_AGE_GRACE_MS,
         GRPC_STALE_MS,
+        GRPC_KEEPALIVE_TIME_MS,
+        GRPC_KEEPALIVE_TIMEOUT_MS,
+        GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS,
+        GRPC_HTTP2_MAX_PINGS_WITHOUT_DATA,
+        GRPC_OPEN_WINDOW_MS,
+        GRPC_OPEN_BURST_LIMIT,
+        GRPC_OPEN_CIRCUIT_MS,
         PUBSUB_CANDIDATE_TTL_MS,
       },
     }, null, 2));
@@ -626,6 +728,11 @@ function scheduleReconnect(videoIdToRetry, delayMs, reason) {
     console.warn(`  [YT] Rate-limit cooldown active — deferring reconnect (${reason}) by ${Math.round(waitMs / 1000)}s`);
     delayMs = waitMs;
   }
+  if (isGrpcReconnectCircuitOpen()) {
+    const waitMs = Math.max(delayMs, getGrpcReconnectCircuitWaitMs() + Math.floor(Math.random() * 5000));
+    console.warn(`  [YT] Reconnect circuit active — deferring reconnect (${reason}) by ${Math.round(waitMs / 1000)}s`);
+    delayMs = waitMs;
+  }
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     if (!running || isStreaming) return;
@@ -634,6 +741,12 @@ function scheduleReconnect(videoIdToRetry, delayMs, reason) {
       // defer again rather than burning a checkIfLive call into the wall.
       const retryIn = Math.max(1000, rateLimitCooldownUntil - Date.now() + 1000);
       console.warn(`  [YT] Cooldown still active at reconnect fire time — retrying in ${Math.round(retryIn / 1000)}s`);
+      scheduleReconnect(videoIdToRetry, retryIn, reason);
+      return;
+    }
+    if (isGrpcReconnectCircuitOpen()) {
+      const retryIn = Math.max(1000, getGrpcReconnectCircuitWaitMs());
+      console.warn(`  [YT] Reconnect circuit still active at reconnect fire time — retrying in ${Math.round(retryIn / 1000)}s`);
       scheduleReconnect(videoIdToRetry, retryIn, reason);
       return;
     }
@@ -653,7 +766,7 @@ function scheduleReconnect(videoIdToRetry, delayMs, reason) {
       }
       videoId = videoIdToRetry;
       liveChatId = chatId;
-      connectGrpcStream().catch((err) => {
+      connectGrpcStream(`reconnect:${reason}`).catch((err) => {
         console.error(`  [YT] Reconnect gRPC error (${reason}): ${err.message}`);
         isStreaming = false;
       });
@@ -759,7 +872,7 @@ async function handleLiveCandidate(candidateVideoId, { source = 'unknown', notif
       broadcast({ type: 'yt.emoji.library', emojis: map });
     });
 
-    connectGrpcStream().catch((err) => {
+    connectGrpcStream(`candidate:${source}`).catch((err) => {
       console.error('  [YT] gRPC error:', err.message);
       isStreaming = false;
     });
@@ -784,12 +897,35 @@ async function handleLiveCandidate(candidateVideoId, { source = 'unknown', notif
 // HTTP/2 keepalive detects dead connections accurately during quiet-chat
 // stretches without us having to guess from message activity. No false
 // "connection is stale" restarts triggered by a quiet crowd.
-async function connectGrpcStream() {
+async function connectGrpcStream(openReason = 'stream-start') {
+  if (isStreaming || activeGrpcStream) {
+    console.warn(`  [YT] Skipping gRPC open (${openReason}) — stream already active`);
+    return;
+  }
+  if (!liveChatId || !videoId) {
+    console.warn(`  [YT] Skipping gRPC open (${openReason}) — missing live chat context`);
+    return;
+  }
+  if (!reserveGrpcOpenSlot(openReason)) {
+    const waitMs = Math.max(1000, getGrpcReconnectCircuitWaitMs());
+    console.error(`  [YT] Refusing gRPC open (${openReason}) — reconnect circuit active for ${Math.round(waitMs / 1000)}s`);
+    logEvent('grpc.open.blocked', {
+      openReason,
+      circuitReason: grpcReconnectCircuitReason || 'open-throttled',
+      waitMs,
+      recentOpenCount: getRecentGrpcOpenCount(),
+    });
+    if (running && !reconnectTimer) {
+      scheduleReconnect(videoId, waitMs, 'grpc-open-circuit');
+    }
+    return;
+  }
   console.log('  [YT] Connecting to YouTube gRPC stream...');
   isStreaming = true;
   grpcStopReason = null;
   const openedAt = Date.now();
   lastGrpcActivityAt = openedAt;
+  lastGrpcIdleAuditAt = 0;
   metrics.grpcStreamsOpened++;
   metrics.lastGrpcOpenAt = openedAt;
   // Opening the gRPC streamList costs 1 quota unit (same as videos.list).
@@ -803,10 +939,10 @@ async function connectGrpcStream() {
     'youtube.googleapis.com:443',
     grpc.credentials.createSsl(),
     {
-      'grpc.keepalive_time_ms': 30000,           // send PING every 30s
-      'grpc.keepalive_timeout_ms': 10000,        // 10s for PONG before connection considered dead
-      'grpc.keepalive_permit_without_calls': 1,  // ping even during quiet chat stretches
-      'grpc.http2.max_pings_without_data': 0,    // no cap on pings when no data
+      'grpc.keepalive_time_ms': GRPC_KEEPALIVE_TIME_MS,                      // send PING every 30s
+      'grpc.keepalive_timeout_ms': GRPC_KEEPALIVE_TIMEOUT_MS,                // 10s for PONG before connection considered dead
+      'grpc.keepalive_permit_without_calls': GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, // ping even during quiet chat stretches
+      'grpc.http2.max_pings_without_data': GRPC_HTTP2_MAX_PINGS_WITHOUT_DATA,     // no cap on pings when no data
     }
   );
 
@@ -824,6 +960,7 @@ async function connectGrpcStream() {
   try {
     for await (const response of stream) {
       lastGrpcActivityAt = Date.now();
+      lastGrpcIdleAuditAt = 0;
       const res = response.toObject();
       processMessages(res.itemsList || []);
       // nextPageToken on a server-streaming response is NOT a reconnect
@@ -870,6 +1007,7 @@ async function connectGrpcStream() {
     nextPageToken = '';
     activeGrpcStream = null;
     grpcStopReason = null;
+    lastGrpcIdleAuditAt = 0;
     logEvent('grpc.closed', { reason: stopReason, durationMs, videoId: wasVideoId });
 
     // Always run cleanup. Previously an early `return` inside `finally` for
@@ -980,10 +1118,10 @@ setInterval(reconcileMessages, RECONCILE_INTERVAL_MS);
 async function grpcWatchdog() {
   if (!isStreaming || !videoId || !liveChatId || clientCount === 0 || grpcWatchdogPending) return;
   if (!lastGrpcActivityAt || Date.now() - lastGrpcActivityAt < GRPC_STALE_MS) return;
-  if (metrics.quotaUsedToday >= QUOTA_RECONCILE_CEILING || isInRateLimitCooldown()) return;
 
   grpcWatchdogPending = true;
   try {
+    const idleMs = Date.now() - lastGrpcActivityAt;
     let twitchLive = null;
     if (TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET) {
       twitchLive = await isTwitchLive();
@@ -994,15 +1132,9 @@ async function grpcWatchdog() {
       }
     }
 
-    const chatId = await checkIfLive(videoId);
-    if (chatId) {
-      liveChatId = chatId;
-      console.warn('  [Watchdog] gRPC stream went stale — restarting');
-      stopGrpcStream('restart');
-    } else {
-      console.warn('  [Watchdog] YouTube no longer reports the stream as live');
-      videoId = null;
-      stopGrpcStream('stream-ended');
+    if (!lastGrpcIdleAuditAt || Date.now() - lastGrpcIdleAuditAt >= GRPC_STALE_MS) {
+      lastGrpcIdleAuditAt = Date.now();
+      console.log(`  [Watchdog] No chat payloads for ${Math.round(idleMs / 60000)} min — keepalive owns transport health, leaving stream open`);
     }
   } catch (err) {
     recordApiError(err, 'grpc-watchdog');

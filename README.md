@@ -51,8 +51,7 @@ Every surface shares the same Impeccable-aligned visual system:
 
 ### Key features
 
-- **Mandatory moderation window** — messages are held for 30s and only release after a reconciliation pass; deleted messages inside that window never render
-- **Two-layer mod sync** — deletions and bans reflect immediately when YouTube emits the event, with a `15s` fallback sweep for missed moderation events
+- **Real-time moderation** — YouTube delete and ban events remove messages immediately via gRPC tombstones, with a reconcile fallback sweep for anything missed
 - **Super chats, member badges, owner badges** pass through with proper styling
 - **Auto-reconnect with cooldown** — exponential backoff on both gRPC and WS; rate-limit errors (`RESOURCE_EXHAUSTED`, per-100s throttles) trigger a structured 5→30 min cooldown instead of a retry loop
 - **HTTP/2 keepalive** — the gRPC streamList connection is held open with `keepalive_time_ms: 30s` so dead connections are detected transparently. No activity-based polling burns quota during quiet chat.

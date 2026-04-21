@@ -2,8 +2,6 @@
 // Talks to the active Twitch tab's content script + the Railway service /health
 
 const HEALTH_POLL_MS = 4000; // popup-only tick — not server quota burn
-const DEFAULT_DELAY_MS = 30000;
-
 const els = {
   svcLed:     document.querySelector('[data-signal="service"] .signal__led'),
   ytLed:      document.querySelector('[data-signal="youtube"] .signal__led'),
@@ -14,10 +12,9 @@ const els = {
   toggle:     document.getElementById('toggle'),
   toggleState:document.getElementById('toggleState'),
   toggleHint: document.getElementById('toggleHint'),
-  delaySlider:document.getElementById('delaySlider'),
   delayReadout:document.getElementById('delayReadout'),
   delayExplain:document.getElementById('delayExplain'),
-  statPending:document.getElementById('statPending'),
+  statMode:   document.getElementById('statMode'),
   statCount:  document.getElementById('statCount'),
   statLast:   document.getElementById('statLast'),
   openOptions:document.getElementById('openOptions'),
@@ -30,14 +27,13 @@ const els = {
 
 let state = {
   enabled: true,
-  delayMs: DEFAULT_DELAY_MS,
   connected: false,
-  pending: 0,
   messagesToday: 0,
   lastMessageAt: null,
   wsUrl: '',
   svcOk: false,
   ytLive: false,
+  serviceAlert: null,
   lastError: null,
   lastHeartbeat: null,
 };
@@ -50,9 +46,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.runtime.sendMessage({ type: 'theochat.popupOpen', value: true });
   els.version.textContent = `v${chrome.runtime.getManifest().version}`;
 
-  const stored = await chrome.storage.sync.get({ enabled: true, delayMs: DEFAULT_DELAY_MS, wsUrl: '' });
+  const stored = await chrome.storage.sync.get({ enabled: true, wsUrl: '' });
   state.enabled = stored.enabled;
-  state.delayMs = stored.delayMs;
   state.wsUrl = stored.wsUrl;
   render();
 
@@ -89,32 +84,22 @@ function render() {
     ? 'Injecting YouTube into Twitch chat'
     : 'YouTube messages are hidden';
 
-  const seconds = Math.round(DEFAULT_DELAY_MS / 1000);
-  els.delaySlider.value = String(seconds);
-  els.delayReadout.textContent = `${seconds}s`;
-  els.delaySlider.style.setProperty('--fill', '100%');
-
-  // Build delay explanation with safe DOM methods (no innerHTML)
-  els.delayExplain.textContent = '';
-  els.delayExplain.appendChild(document.createTextNode('Messages are held '));
-  const strong = document.createElement('strong');
-  strong.textContent = `${seconds}s`;
-  els.delayExplain.appendChild(strong);
-  els.delayExplain.appendChild(document.createTextNode(
-    ' before appearing, and only release after a moderation reconciliation pass. This safety window is locked on.'
-  ));
-
-  els.statPending.textContent = String(state.pending);
+  els.delayReadout.textContent = 'LIVE';
+  els.delayExplain.textContent = 'Messages appear immediately. YouTube delete and ban events remove them immediately, and reconcile stays on as a fallback if a moderation event is missed.';
+  els.statMode.textContent = state.enabled ? (state.connected ? 'LIVE' : 'WAIT') : 'OFF';
   els.statCount.textContent = formatCount(state.messagesToday);
   els.statLast.textContent = formatRelative(state.lastMessageAt);
 
   els.endpoint.textContent = state.wsUrl || 'not configured';
 
   // Alert logic — only show when something's actionable
-  const showAlert = state.enabled && (!state.connected || state.lastError);
+  const showAlert = state.enabled && (Boolean(state.serviceAlert) || !state.connected || state.lastError);
   els.alert.hidden = !showAlert;
   if (showAlert) {
-    if (state.lastError && Date.now() - (state.lastError.at || 0) < 120000) {
+    if (state.serviceAlert) {
+      els.alert.dataset.state = 'idle';
+      els.alertText.textContent = state.serviceAlert;
+    } else if (state.lastError && Date.now() - (state.lastError.at || 0) < 120000) {
       // Recent error (<2 min old)
       els.alert.dataset.state = 'err';
       els.alertText.textContent = state.lastError.message;
@@ -168,6 +153,7 @@ async function pollHealth() {
   if (!state.wsUrl) {
     state.svcOk = false;
     state.ytLive = false;
+    state.serviceAlert = null;
     render();
     return;
   }
@@ -180,12 +166,27 @@ async function pollHealth() {
     const data = await res.json();
     state.svcOk = data.status === 'ok';
     state.ytLive = !!data.streaming;
+    state.serviceAlert = data.grpcReconnectCircuitOpen
+      ? buildCircuitMessage(data.grpcReconnectCircuitUntil)
+      : null;
     render();
   } catch {
     state.svcOk = false;
     state.ytLive = false;
+    state.serviceAlert = null;
     render();
   }
+}
+
+function buildCircuitMessage(untilMs) {
+  if (!untilMs) return 'YouTube auto-reconnect paused to protect quota';
+  const until = new Date(untilMs);
+  const stamp = Number.isNaN(until.getTime())
+    ? ''
+    : until.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return stamp
+    ? `YouTube auto-reconnect paused to protect quota until ${stamp}`
+    : 'YouTube auto-reconnect paused to protect quota';
 }
 
 async function queryActiveTabStatus() {
@@ -199,7 +200,6 @@ async function queryActiveTabStatus() {
     const reply = await chrome.tabs.sendMessage(tab.id, { type: 'theochat.getStatus' });
     if (reply) {
       state.connected = !!reply.connected;
-      state.pending = reply.pending ?? 0;
       state.messagesToday = reply.messagesToday ?? 0;
       state.lastMessageAt = reply.lastMessageAt ?? null;
       state.lastError = reply.lastError ?? null;

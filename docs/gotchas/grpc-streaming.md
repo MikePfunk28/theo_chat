@@ -78,6 +78,11 @@ const client = new V3DataLiveChatMessageServiceClient(
   `videos.list` units. The activity watchdog is a belt-and-suspenders
   fallback now (`GRPC_STALE_MS = 15 min`), not the primary path.
 
+The service also keeps a runtime reconnect circuit breaker around
+`streamList` opens. If the process tries to open too many streams in a
+short window, it freezes auto-reconnect and surfaces that state in
+`/health` and `/metrics` instead of burning more quota.
+
 ## Quota cost per broadcast, correctly accounted
 
 - `videos.list` on first connect: 1 unit

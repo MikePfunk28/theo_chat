@@ -21,24 +21,16 @@
 
   // ─── Configuration ────────────────────────────────────────────
   const DEFAULT_WS_URL = 'ws://localhost:9300';
-  const DEFAULT_DELAY_MS = 30000;
-  const MIN_SAFE_DELAY_MS = 30000;
   const RECONNECT_DELAY = 3000;
   let WS_URL = DEFAULT_WS_URL;
   let WS_TOKEN = '';
 
   // ─── Settings (synced with popup) ─────────────────────────────
   let ENABLED = true;       // master on/off
-  let DELAY_MS = DEFAULT_DELAY_MS; // mandatory mod buffer: hold messages until a reconcile pass has cleared them
   let messagesToday = 0;    // counter for popup stats
   let lastMessageAt = null; // timestamp for popup stats
   let lastError = null;     // { message, at } — visible in popup
   let lastHeartbeat = null; // last time we got anything from the service
-  let lastReconcileAt = 0;  // last successful moderation reconciliation timestamp from the service
-
-  // ─── Pending message queue (for delay buffer) ─────────────────
-  // Each entry: { event, timerId, injectAt }
-  const pendingQueue = new Map(); // messageId -> entry
 
   // ─── Custom YouTube emoji library (shortcut → image URL) ──────
   // Populated when service sends yt.emoji.library event.
@@ -228,36 +220,20 @@
 
     switch (event.type) {
       case 'yt.message.created':
-        queueOrInject(event);
+        injectChatMessage(event);
+        messagesToday++;
+        lastMessageAt = Date.now();
         break;
 
       case 'yt.message.deleted':
-        // If still pending, drop silently. Otherwise remove from DOM.
-        if (pendingQueue.has(event.messageId)) {
-          const entry = pendingQueue.get(event.messageId);
-          clearTimeout(entry.timerId);
-          pendingQueue.delete(event.messageId);
-        } else {
-          deleteMessage(event.messageId);
-        }
+        deleteMessage(event.messageId);
         break;
 
       case 'yt.user.banned':
-        // Drop all pending from this user + remove any already-injected
-        for (const [msgId, entry] of pendingQueue) {
-          if (entry.event.userId === event.userId) {
-            clearTimeout(entry.timerId);
-            pendingQueue.delete(msgId);
-          }
-        }
         banUser(event.userId, event.bannedMessageIds || []);
         break;
 
       case 'yt.chat.ended':
-        // Flush the queue so nothing gets injected after chat is gone.
-        // Status reflected in popup signal LEDs — no notification in Twitch chat.
-        for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
-        pendingQueue.clear();
         break;
 
       case 'system.connected':
@@ -274,59 +250,17 @@
         break;
 
       case 'system.reconciled':
-        lastReconcileAt = event.at || Date.now();
-        flushPendingQueue();
         break;
-    }
-  }
-
-  const MAX_PENDING = 200;
-
-  function queueOrInject(event) {
-    if (DELAY_MS <= 0) {
-      injectChatMessage(event);
-      messagesToday++;
-      lastMessageAt = Date.now();
-      return;
-    }
-    // Cap the queue to avoid unbounded memory — drop oldest if full
-    if (pendingQueue.size >= MAX_PENDING) {
-      const oldestKey = pendingQueue.keys().next().value;
-      const oldest = pendingQueue.get(oldestKey);
-      if (oldest) clearTimeout(oldest.timerId);
-      pendingQueue.delete(oldestKey);
-    }
-    // Hold for DELAY_MS, then wait for the next reconcile pass before rendering.
-    const timerId = setTimeout(() => {
-      const entry = pendingQueue.get(event.messageId);
-      if (!entry) return;
-      entry.ready = true;
-      flushPendingQueue();
-    }, DELAY_MS);
-    pendingQueue.set(event.messageId, {
-      event,
-      timerId,
-      injectAt: Date.now() + DELAY_MS,
-      ready: false,
-    });
-  }
-
-  function flushPendingQueue() {
-    if (!chatContainer) return;
-    for (const [messageId, entry] of pendingQueue) {
-      if (!entry.ready) continue;
-      if (lastReconcileAt < entry.injectAt) continue;
-      clearTimeout(entry.timerId);
-      pendingQueue.delete(messageId);
-      injectChatMessage(entry.event);
-      messagesToday++;
-      lastMessageAt = Date.now();
     }
   }
 
   // ─── DOM Injection ───────────────────────────────────────────
 
   function injectChatMessage(event) {
+    if (!chatContainer) return;
+    const existing = chatContainer.querySelector(`[data-theochat-msg-id="${CSS.escape(event.messageId)}"]`);
+    if (existing) return;
+
     const el = document.createElement('div');
     el.className = 'theochat-msg';
     el.setAttribute('data-theochat-msg-id', event.messageId);
@@ -477,8 +411,6 @@
     isConnected = false;
     reconnectAttempts = 0;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
-    pendingQueue.clear();
     if (chatContainer) {
       try { chatContainer.querySelectorAll('.theochat-msg').forEach((el) => el.remove()); } catch {}
     }
@@ -535,13 +467,12 @@
 
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
     chrome.storage.sync.get(
-      { wsUrl: DEFAULT_WS_URL, wsToken: '', enabled: true, delayMs: DEFAULT_DELAY_MS },
+      { wsUrl: DEFAULT_WS_URL, wsToken: '', enabled: true },
       async (result) => {
         WS_URL = await resolveWsUrl(result.wsUrl);
         WS_TOKEN = result.wsToken || '';
         ENABLED = result.enabled !== false;
-        DELAY_MS = Math.max(MIN_SAFE_DELAY_MS, parseInt(result.delayMs, 10) || DEFAULT_DELAY_MS);
-        console.log(`[TheoChat] WS URL loaded: ${WS_URL} | enabled=${ENABLED} | delay=${DELAY_MS}ms`);
+        console.log(`[TheoChat] WS URL loaded: ${WS_URL} | enabled=${ENABLED} | delivery=realtime`);
         if (isTargetChannelPage()) {
           waitForChatContainer();
         } else {
@@ -555,21 +486,16 @@
       if (msg.type === 'theochat.setEnabled') {
         ENABLED = !!msg.value;
         if (!ENABLED) {
-          // Flush queue + clear injected YT messages when disabled
-          for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
-          pendingQueue.clear();
           if (chatContainer) {
             chatContainer.querySelectorAll('.theochat-msg').forEach((el) => el.remove());
           }
         }
-      } else if (msg.type === 'theochat.setDelay') {
-        DELAY_MS = Math.max(MIN_SAFE_DELAY_MS, parseInt(msg.value, 10) || DEFAULT_DELAY_MS);
       } else if (msg.type === 'theochat.getStatus') {
         sendResponse({
           enabled: ENABLED,
-          delayMs: DELAY_MS,
+          delayMs: 0,
           connected: isConnected,
-          pending: pendingQueue.size,
+          pending: 0,
           messagesToday,
           lastMessageAt,
           wsUrl: WS_URL,
@@ -582,8 +508,6 @@
         forceReconnect();
         sendResponse({ ok: true });
       } else if (msg.type === 'theochat.flushQueue') {
-        for (const entry of pendingQueue.values()) clearTimeout(entry.timerId);
-        pendingQueue.clear();
         sendResponse({ ok: true });
       }
     });
