@@ -253,3 +253,11 @@ YouTube Data API has a default 10,000 units/day. TheoChat's design:
 ## License
 
 MIT.
+
+## 🎨 Custom Channel Emojis
+
+As a fun bonus, I used the new ChatGPT Images model to generate a few custom channel emojis that fit the stream's vibe. Feel free to grab them for Twitch, YouTube, or Discord! 
+
+You can find the full set in the [`assets/emoticons`](assets\emoticons) folder. Here are a few favorites:
+
+<img src="assets\emoticons\t3_4thelove.png" width="100"> <img src="assets\emoticons\t3-selfie.png" width="100"> <img src="assets\emoticons\t3_rad_darkhair.png" width="100">
