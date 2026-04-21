@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TheoChat — YouTube in Twitch",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Injects YouTube live chat messages into Twitch chat for a unified view.",
   "permissions": ["storage", "tabs", "notifications"],
   "background": {
